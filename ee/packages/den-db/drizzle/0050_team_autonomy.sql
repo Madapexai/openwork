@@ -13,7 +13,7 @@ ALTER TABLE `team` ADD `settings` json;--> statement-breakpoint
 ALTER TABLE `team` ADD `owner_user_id` varchar(64);--> statement-breakpoint
 CREATE UNIQUE INDEX `team_organization_slug` ON `team` (`organization_id`,`slug`);--> statement-breakpoint
 CREATE INDEX `team_kind` ON `team` (`kind`);--> statement-breakpoint
-CREATE INDEX `team_owner_user_id` ON `team` (`owner_user_id`);
+CREATE INDEX `team_owner_user_id` ON `team` (`owner_user_id`);--> statement-breakpoint
 
 -- ---------- Step 2: 角色契约（WorkBuddy Ch24） ----------
 CREATE TABLE `team_role` (

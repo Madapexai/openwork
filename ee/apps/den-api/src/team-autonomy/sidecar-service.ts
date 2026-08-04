@@ -13,10 +13,24 @@
 import { db } from "../db.js"
 import { eq } from "@openwork-ee/den-db/drizzle"
 import { TeamAgentStatus, TeamAgentTable } from "@openwork-ee/den-db/schema"
+import { normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
 
 // ============================================================
 // 类型导出
 // ============================================================
+
+// 边界转换：string → 模板字面量 DenTypeId（denTypeIdColumn 的 data 类型）
+// 非法 id（前缀不匹配）→ null，调用方按"查询未命中"处理（保持原有 404/null 语义）
+function normalizeIdOrNull<TName extends DenTypeIdName>(
+  name: TName,
+  value: string,
+): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 export { TeamAgentStatus }
 
@@ -81,13 +95,22 @@ export async function registerSidecarSession(
   agentId: string,
   sessionId: string,
 ): Promise<RegisterSidecarResult> {
+  const normalizedAgentId = normalizeIdOrNull("teamAgent", agentId)
+  if (!normalizedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+
   const updateResult = await db
     .update(TeamAgentTable)
     .set({
       sidecar_session_id: sessionId,
       updated_at: new Date(),
     })
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
 
   const affected = extractAffectedRows(updateResult)
   if (affected === 0) {
@@ -105,7 +128,7 @@ export async function registerSidecarSession(
       status: TeamAgentTable.status,
     })
     .from(TeamAgentTable)
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
     .limit(1)
 
   if (!row[0]) {
@@ -123,6 +146,8 @@ export async function registerSidecarSession(
 // ============================================================
 
 export async function getSidecarSession(agentId: string): Promise<SidecarSession | null> {
+  const normalizedAgentId = normalizeIdOrNull("teamAgent", agentId)
+  if (!normalizedAgentId) return null
   const rows = await db
     .select({
       id: TeamAgentTable.id,
@@ -130,7 +155,7 @@ export async function getSidecarSession(agentId: string): Promise<SidecarSession
       status: TeamAgentTable.status,
     })
     .from(TeamAgentTable)
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
     .limit(1)
   return rows[0] ? rowToSession(rows[0]) : null
 }
@@ -142,6 +167,15 @@ export async function getSidecarSession(agentId: string): Promise<SidecarSession
 export async function invalidateSidecarSession(
   agentId: string,
 ): Promise<InvalidateSidecarResult> {
+  const normalizedAgentId = normalizeIdOrNull("teamAgent", agentId)
+  if (!normalizedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+
   const updateResult = await db
     .update(TeamAgentTable)
     .set({
@@ -149,7 +183,7 @@ export async function invalidateSidecarSession(
       status: "offline",
       updated_at: new Date(),
     })
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
 
   const affected = extractAffectedRows(updateResult)
   if (affected === 0) {
@@ -167,7 +201,7 @@ export async function invalidateSidecarSession(
       status: TeamAgentTable.status,
     })
     .from(TeamAgentTable)
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
     .limit(1)
 
   if (!row[0]) {
@@ -188,6 +222,8 @@ export async function invalidateSidecarSession(
 export async function onAgentDeleted(agentId: string): Promise<void> {
   // 直接 UPDATE sidecar_session_id=NULL, status='offline' WHERE id=agentId
   // 若 agent 已被删（行不存在），UPDATE 影响 0 行，no-op
+  const normalizedAgentId = normalizeIdOrNull("teamAgent", agentId)
+  if (!normalizedAgentId) return
   await db
     .update(TeamAgentTable)
     .set({
@@ -195,7 +231,7 @@ export async function onAgentDeleted(agentId: string): Promise<void> {
       status: "offline",
       updated_at: new Date(),
     })
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, normalizedAgentId))
   // 不抛错：调用方（deleteAgent）已经在 DELETE agent；此处只是兜底
   // 实际 agent 行会被 DELETE，sidecar_session_id 自然消失；
   // 此 hook 的价值在于"agent 删除前先 mark offline"以便 sidecar 侧清理资源。

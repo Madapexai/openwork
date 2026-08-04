@@ -351,7 +351,8 @@ describe("P3 Sidecar + PersonalTeam + Budget + Mailbox — OpenSpecs RED/GREEN",
     if (first.ok) {
       assert.strictEqual(first.created, true)
       assert.strictEqual(first.team.kind, "personal")
-      assert.strictEqual(first.team.slug, "personal")
+      // slug 唯一（personal-<teamId>），防同 org 下撞 team_organization_slug 唯一索引
+      assert.ok(first.team.slug.startsWith("personal-"), `slug should start with personal-, got ${first.team.slug}`)
       assert.strictEqual(first.team.ownerUserId, userId)
     }
 
@@ -417,7 +418,7 @@ describe("P3 Sidecar + PersonalTeam + Budget + Mailbox — OpenSpecs RED/GREEN",
     if (okResult.ok) {
       assert.strictEqual(okResult.team.name, "Renamed Personal")
       // slug / kind 仍不变
-      assert.strictEqual(okResult.team.slug, "personal")
+      assert.ok(okResult.team.slug.startsWith("personal-"), `slug should start with personal-, got ${okResult.team.slug}`)
       assert.strictEqual(okResult.team.kind, "personal")
     }
   })

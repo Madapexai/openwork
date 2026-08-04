@@ -14,11 +14,24 @@
 import { db } from "../db.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import { TeamTable } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
 
 // ============================================================
 // 类型导出
 // ============================================================
+
+// 边界转换：string → 模板字面量 DenTypeId（denTypeIdColumn 的 data 类型）
+// 非法 id（前缀不匹配）→ null，调用方按"查询未命中"处理（保持原有 400/404 语义）
+function normalizeIdOrNull<TName extends DenTypeIdName>(
+  name: TName,
+  value: string,
+): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 export type PersonalTeamRow = {
   id: string
@@ -92,13 +105,23 @@ function rowToPersonalTeam(row: typeof TeamTable.$inferSelect): PersonalTeamRow 
 export async function ensurePersonalTeam(
   input: EnsurePersonalTeamInput,
 ): Promise<EnsurePersonalTeamResult> {
+  const normalizedUserId = normalizeIdOrNull("user", input.userId)
+  const normalizedOrgId = normalizeIdOrNull("organization", input.organizationId)
+  if (!normalizedUserId || !normalizedOrgId) {
+    return {
+      ok: false,
+      status: 400,
+      response: { code: "INSERT_FAILED", message: "invalid user or organization id" },
+    }
+  }
+
   // I1: 先查 owner_user_id + kind='personal'
   const existing = await db
     .select()
     .from(TeamTable)
     .where(
       and(
-        eq(TeamTable.ownerUserId, input.userId),
+        eq(TeamTable.ownerUserId, normalizedUserId),
         eq(TeamTable.kind, "personal"),
       ),
     )
@@ -108,17 +131,19 @@ export async function ensurePersonalTeam(
     return { ok: true, team: rowToPersonalTeam(existing[0]), created: false }
   }
 
-  // 不存在 → 创建（slug='personal', kind='personal', owner_user_id=userId）
+  // 不存在 → 创建（slug='personal-<teamId>'、name='Personal <teamId>' 均唯一, kind='personal', owner_user_id=userId）
+  // 注：team 表有 team_organization_slug/team_organization_name 两个 org 内唯一索引，
+  //     同一 org 下多个用户的 personal team 必须用唯一 slug+name，否则第二个用户创建会撞索引
   const id = createDenTypeId("team")
-  const name = input.name ?? "Personal"
+  const name = input.name ?? `Personal ${id}`
   try {
     await db.insert(TeamTable).values({
       id,
-      organizationId: input.organizationId,
+      organizationId: normalizedOrgId,
       name,
-      slug: "personal",
+      slug: `personal-${id}`,
       kind: "personal",
-      ownerUserId: input.userId,
+      ownerUserId: normalizedUserId,
       settings: null,
     })
   } catch (error) {
@@ -129,7 +154,7 @@ export async function ensurePersonalTeam(
       .from(TeamTable)
       .where(
         and(
-          eq(TeamTable.ownerUserId, input.userId),
+          eq(TeamTable.ownerUserId, normalizedUserId),
           eq(TeamTable.kind, "personal"),
         ),
       )
@@ -163,12 +188,14 @@ export async function ensurePersonalTeam(
 // ============================================================
 
 export async function getPersonalTeam(userId: string): Promise<PersonalTeamRow | null> {
+  const normalizedUserId = normalizeIdOrNull("user", userId)
+  if (!normalizedUserId) return null
   const rows = await db
     .select()
     .from(TeamTable)
     .where(
       and(
-        eq(TeamTable.ownerUserId, userId),
+        eq(TeamTable.ownerUserId, normalizedUserId),
         eq(TeamTable.kind, "personal"),
       ),
     )
@@ -184,6 +211,15 @@ export async function updatePersonalTeam(
   teamId: string,
   patch: UpdatePersonalTeamInput,
 ): Promise<UpdatePersonalTeamResult> {
+  const normalizedTeamId = normalizeIdOrNull("team", teamId)
+  if (!normalizedTeamId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `team ${teamId} not found` },
+    }
+  }
+
   // I2: personal team 守门 — slug/kind 不可改
   if (isPersonalTeamImmutable(patch)) {
     return {
@@ -196,7 +232,7 @@ export async function updatePersonalTeam(
     }
   }
 
-  const existing = await db.select().from(TeamTable).where(eq(TeamTable.id, teamId)).limit(1)
+  const existing = await db.select().from(TeamTable).where(eq(TeamTable.id, normalizedTeamId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -221,9 +257,9 @@ export async function updatePersonalTeam(
   if (patch.name !== undefined) updates.name = patch.name
   if (patch.settings !== undefined) updates.settings = patch.settings
 
-  await db.update(TeamTable).set(updates).where(eq(TeamTable.id, teamId))
+  await db.update(TeamTable).set(updates).where(eq(TeamTable.id, normalizedTeamId))
 
-  const updated = await db.select().from(TeamTable).where(eq(TeamTable.id, teamId)).limit(1)
+  const updated = await db.select().from(TeamTable).where(eq(TeamTable.id, normalizedTeamId)).limit(1)
   return { ok: true, team: updated[0] ? rowToPersonalTeam(updated[0]) : rowToPersonalTeam(existing[0]) }
 }
 

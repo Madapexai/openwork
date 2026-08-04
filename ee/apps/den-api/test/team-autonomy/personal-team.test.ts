@@ -6,7 +6,7 @@ import { createDenTypeId } from "@openwork-ee/utils/typeid"
 // OpenSpecs P3-A — PersonalTeam 自动创建 RED/GREEN 测试
 // 框架：node:test + tsx（任务要求）
 // 不变量：
-//   I1: 新用户注册后自动创建 kind=personal 的 Team（slug='personal', owner_user_id=userId）
+//   I1: 新用户注册后自动创建 kind=personal 的 Team（slug='personal-<teamId>' 唯一, owner_user_id=userId）
 //       ensurePersonalTeam(memberId, userId) 幂等：重复调用返回同一 team
 //   I2: personal team 的 ownerUserId=该用户（member 必须属于该 userId）→ 403 MEMBER_USER_MISMATCH
 //   I3: personal team 自动创建 team_permission_profile（profile='simple', default_mode='craft'）
@@ -34,6 +34,9 @@ const userId = createDenTypeId("user")
 const otherUserId = createDenTypeId("user")
 const memberId = createDenTypeId("member")
 const otherMemberId = createDenTypeId("member")
+// 同一 org（organizationId）下的第二个用户 + member（slug 唯一性回归测试 T8 用）
+const secondUserId = createDenTypeId("user")
+const secondMemberId = createDenTypeId("member")
 
 type DbModule = typeof import("../../src/db.js")
 type DrizzleModule = typeof import("@openwork-ee/den-db/drizzle")
@@ -51,13 +54,13 @@ async function clearAll() {
   const personalTeams = await db
     .select({ id: schema.TeamTable.id })
     .from(schema.TeamTable)
-    .where(drizzle.inArray(schema.TeamTable.ownerUserId, [userId, otherUserId]))
+    .where(drizzle.inArray(schema.TeamTable.ownerUserId, [userId, otherUserId, secondUserId]))
   const teamIds = personalTeams.map((t) => t.id)
   if (teamIds.length > 0) {
     await db.delete(schema.TeamPermissionProfileTable).where(drizzle.inArray(schema.TeamPermissionProfileTable.team_id, teamIds))
   }
-  await db.delete(schema.TeamTable).where(drizzle.inArray(schema.TeamTable.ownerUserId, [userId, otherUserId]))
-  await db.delete(schema.MemberTable).where(drizzle.inArray(schema.MemberTable.id, [memberId, otherMemberId]))
+  await db.delete(schema.TeamTable).where(drizzle.inArray(schema.TeamTable.ownerUserId, [userId, otherUserId, secondUserId]))
+  await db.delete(schema.MemberTable).where(drizzle.inArray(schema.MemberTable.id, [memberId, otherMemberId, secondMemberId]))
   await db.delete(schema.OrganizationTable).where(drizzle.inArray(schema.OrganizationTable.id, [organizationId, otherOrganizationId]))
 }
 
@@ -90,6 +93,14 @@ before(async () => {
       organizationId,
       userId,
       role: "owner",
+      status: "active",
+    })
+    // 同一 org 下的第二个用户 member（slug 唯一性回归测试 T8 用）
+    await db.insert(schema.MemberTable).values({
+      id: secondMemberId,
+      organizationId,
+      userId: secondUserId,
+      role: "member",
       status: "active",
     })
     // 其他 org + 其他用户 member（用于跨用户校验）
@@ -132,7 +143,8 @@ describe("P3-A PersonalTeam 自动创建 — OpenSpecs RED/GREEN", () => {
     if (result.ok) {
       assert.strictEqual(result.created, true)
       assert.strictEqual(result.team.kind, "personal")
-      assert.strictEqual(result.team.slug, "personal")
+      // slug 唯一（personal-<teamId>），防同 org 下撞 team_organization_slug 唯一索引
+      assert.ok(result.team.slug.startsWith("personal-"), `slug should start with personal-, got ${result.team.slug}`)
       // I2: ownerUserId = userId
       assert.strictEqual(result.team.ownerUserId, userId)
       assert.strictEqual(result.team.organizationId, organizationId)
@@ -242,6 +254,28 @@ describe("P3-A PersonalTeam 自动创建 — OpenSpecs RED/GREEN", () => {
     if (!missing.ok) {
       assert.strictEqual(missing.status, 404)
       assert.strictEqual(missing.response.code, "MEMBER_NOT_FOUND")
+    }
+  })
+
+  // ---------- T8: slug 唯一性回归（同一 org 下两个用户的 personal team） ----------
+  test("T8: same-org second user gets a distinct personal team slug (unique index safe)", async (t) => {
+    if (!dbAvailable) return t.skip("DB not available")
+    // first user（memberId/userId）的 personal team 已由 T1 创建（同 organizationId）
+    const first = await personalTeamSvc.ensurePersonalTeam(memberId, userId)
+    assert.strictEqual(first.ok, true)
+    if (!first.ok) return
+
+    // 同一 org（organizationId）下的第二个用户 → 旧实现会撞 team_organization_slug/name 唯一索引
+    const second = await personalTeamSvc.ensurePersonalTeam(secondMemberId, secondUserId)
+    assert.strictEqual(second.ok, true)
+    if (second.ok) {
+      assert.strictEqual(second.created, true)
+      assert.notStrictEqual(second.team.id, first.team.id)
+      // 两个 slug 必须不同，且都遵循 personal-<teamId> 格式
+      assert.notStrictEqual(second.team.slug, first.team.slug)
+      assert.ok(second.team.slug.startsWith("personal-"), `slug should start with personal-, got ${second.team.slug}`)
+      assert.strictEqual(second.team.organizationId, organizationId)
+      assert.strictEqual(second.team.ownerUserId, secondUserId)
     }
   })
 })

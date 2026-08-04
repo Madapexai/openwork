@@ -21,7 +21,7 @@
 
 | ID | 不变量 | 失败返回 |
 |---|---|---|
-| I1 | 新用户注册后自动创建 `kind=personal` 的 Team（slug="personal"，owner_user_id=user.id）；`ensurePersonalTeam(memberId, userId)` 幂等：重复调用返回同一 team | 404 / MEMBER_NOT_FOUND |
+| I1 | 新用户注册后自动创建 `kind=personal` 的 Team（slug="personal-&lt;teamId&gt;" 唯一，owner_user_id=user.id）；`ensurePersonalTeam(memberId, userId)` 幂等：重复调用返回同一 team | 404 / MEMBER_NOT_FOUND |
 | I2 | personal team 的 `ownerUserId` = 传入的 userId（member 必须属于该 userId） | 403 / MEMBER_USER_MISMATCH |
 | I3 | personal team 创建时自动创建 `team_permission_profile`（profile="simple"，default_mode="craft"，updated_by=memberId）；已存在则幂等保留 | — |
 
@@ -180,3 +180,18 @@ GREEN 后（DB 可用）验证：
 - 循环依赖检查：`personal-team.ts` 仅依赖 `../db.js` / `@openwork-ee/den-db` / `@openwork-ee/utils/typeid`，不反向依赖 `auth.ts` → 无循环依赖，静态 import 安全
 - 验证：`tsc --noEmit` auth.ts 0 错误（src/team-autonomy/* 既有报错属其他并行任务）；运行时 `import('./src/team-autonomy/personal-team.js')` 加载正常（导出 ensurePersonalTeamForUser）；`test/member-connected-account-revocation-contract.test.ts` 5/5 pass（读 auth.ts 源码契约测试，不回归）
 - commit：`feat(team-autonomy): wire personal-team auto-create into auth session.create hook`
+
+### §7.2 slug 唯一性修复 + typeid 类型收窄（2026-08-04）
+- **Bug 根因**：personal team 创建时固定 `slug="personal"`（`personal-team.ts` 与 `personal-team-service.ts` 各一处），而 `team` 表有 org 内唯一索引 `team_organization_slug (organization_id, slug)`。同一 org 下第二个用户创建 personal team 会撞唯一索引 → `INSERT_FAILED`（`sidecar-personal-budget.test.ts` T11/T12 因此失败）。
+- **修复方案**：
+  1. slug 改为唯一值 `personal-<teamId>`（teamId 为 `createDenTypeId("team")` 生成的 `tem_xxxxx`，base32 无特殊字符，一定唯一安全）；`kind='personal'` 不变。
+  2. **附加发现**：`team` 表还有 `team_organization_name (organization_id, name)` 唯一索引。slug 修复后同 org 两个用户默认 name 均为 "Personal" 仍会撞索引（新增回归测试 T8 实测暴露），故 name 同步改为 `Personal <teamId>`（传入自定义 name 时保留自定义值，不受影响）。
+  3. **查询逻辑不变**：所有 `ensurePersonalTeam/getPersonalTeam` 均按 `ownerUserId + kind='personal'` 查询，不依赖 slug，无需改查询。
+  4. **typeid 类型收窄**（tsc --noEmit 实测 3 文件 19 错误 → 0）：
+     - `personal-team.ts`（6 错误）/ `personal-team-service.ts`（7 错误）/ `sidecar-service.ts`（6 错误）：`denTypeIdColumn` 的 data 类型是模板字面量（`tem_${string}` / `tppr_${string}` / `om_${string}` / `tagt_${string}` 等），而 service 入参是 `string`，`eq(column, string)` / `insert(values)` 报 TS2769。
+     - 解法（openwork 标准）：各文件在边界定义 `normalizeIdOrNull(name, value)`（内部 `normalizeDenTypeId` + try/catch → 非法 id 返回 null），查询处按"查询未命中"处理，保持原有 404/400/null 语义（无 as any 逃生舱）。
+- **测试证据**：
+  - 新增回归 T8：同一 org（organizationId）下 `secondUserId/secondMemberId` 创建 personal team → `ok=true, created=true`，`team.id` 与首用户不同、`slug` 不同且均 `startsWith("personal-")`（修复前该场景 INSERT_FAILED）。
+  - 断言更新：`personal-team.test.ts` T1 与 `sidecar-personal-budget.test.ts` T10/T12 的 `slug === "personal"` 改为 `slug.startsWith("personal-")`。
+  - 结果：`personal-team.test.ts` T1-T8 8/8 pass；`sidecar-personal-budget.test.ts` T5-T22 19/19 pass（含此前失败的 T11/T12）；`tsc --noEmit` 3 目标文件 0 错误。
+- commit：`fix(team-autonomy): unique personal-team slug (personal-<teamId>) + typeid types in personal-team/sidecar services`

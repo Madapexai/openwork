@@ -36,6 +36,9 @@ apps/desktop/server/
 # migration-release commit and removed by 03-post-migration-cleanup.mjs.
 # Allow git to see it so `cut-migration-release` can commit it.
 !.env.migration-release
+# Committed template for the local-only .env.local override (e.g. pointing
+# the client at a self-hosted den-api via VITE_DEN_BASE_URL).
+!.env.local.example
 
 # Bun build artifacts
 *.bun-build

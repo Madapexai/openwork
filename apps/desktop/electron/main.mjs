@@ -906,7 +906,11 @@ if (extraLaunchArgs) {
   }
 }
 configureFakeMediaForTests(app, envFlagEnabled("OPENWORK_ELECTRON_FAKE_MEDIA"));
-const DEFAULT_DEN_BASE_URL = "https://app.openworklabs.com";
+// Dev/self-hosted override: point the desktop client's default Den control
+// plane at a local den-api (e.g. OPENWORK_DEN_BASE_URL=http://127.0.0.1:8790).
+// Falls back to the official OpenWork Cloud when unset.
+const DEFAULT_DEN_BASE_URL =
+  (process.env.OPENWORK_DEN_BASE_URL ?? "").trim() || "https://app.openworklabs.com";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:4096";
 const FORCE_DESKTOP_REQUIRE_SIGNIN =
   DESKTOP_DISTRIBUTION.requireSignin || envFlagEnabled("OPENWORK_FORCE_SIGNIN");

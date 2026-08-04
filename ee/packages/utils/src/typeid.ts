@@ -90,6 +90,27 @@ export const idTypesMapNameToPrefix = {
   telegramUpdate: "tgu",
   memory: "mem",
   memctx: "mctx",
+  // ---------- 团队自治（team-autonomy）新增 type ids ----------
+  // 全部用 4 字符前缀，避免与现有 team: tem / teamMember: tmb 冲突
+  teamRole: "trol",
+  teamAgent: "tagt",
+  teamTask: "ttsk",
+  teamBoard: "tbrd",
+  teamTaskHandoff: "tthd",
+  teamArtifact: "tart",
+  teamArtifactVersion: "tarv",
+  teamMailbox: "tmbx",
+  teamBudget: "tbgt",
+  teamBudgetAllocation: "tbal",
+  teamAutomation: "taut",
+  teamAutomationRun: "taur",
+  teamAutomationAlert: "taal",
+  skillValidation: "svld",
+  skillTestCase: "stst",
+  skillLink: "slnk",
+  teamPermissionProfile: "tppr",
+  teamStandingRule: "tsrl",
+  teamInbox: "tibx",
 } as const
 
 export const denTypeIdPrefixes = idTypesMapNameToPrefix

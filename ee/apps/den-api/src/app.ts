@@ -28,6 +28,7 @@ import { registerMcpTokenRoutes } from "./routes/mcp/index.js"
 import { registerMemoryRoutes } from "./routes/memory/index.js"
 import { registerMeRoutes } from "./routes/me/index.js"
 import { registerOrgRoutes } from "./routes/org/index.js"
+import { registerTeamAutonomyRoutes } from "./routes/team-autonomy/index.js"
 import { registerTelemetryRoutes } from "./routes/telemetry/index.js"
 import { registerVersionRoutes } from "./routes/version/index.js"
 import { registerWebhookRoutes } from "./routes/webhooks/index.js"
@@ -197,6 +198,7 @@ registerDevRoutes(app)
 registerMeRoutes(app)
 registerMemoryRoutes(app)
 registerOrgRoutes(app)
+registerTeamAutonomyRoutes(app)
 registerVersionRoutes(app)
 registerWebhookRoutes(app)
 registerWorkerRoutes(app)

@@ -21,7 +21,16 @@ import {
   TeamPermissionProfileTable,
   TeamStandingRuleTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型
@@ -192,10 +201,12 @@ function rowToStandingRule(row: typeof TeamStandingRuleTable.$inferSelect): Stan
 // ============================================================
 
 export async function getTeamPermissionProfile(teamId: string): Promise<PermissionProfileRow | null> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return null
   const rows = await db
     .select()
     .from(TeamPermissionProfileTable)
-    .where(eq(TeamPermissionProfileTable.team_id, teamId))
+    .where(eq(TeamPermissionProfileTable.team_id, parsedTeamId))
     .limit(1)
   return rows[0] ? rowToProfile(rows[0]) : null
 }
@@ -240,10 +251,10 @@ export async function setTeamPermissionProfile(
         profile: input.profile,
         default_mode: input.defaultMode,
         custom_rules: input.customRules ?? null,
-        updated_by: actor.memberId,
+        updated_by: normalizeDenTypeId("member", actor.memberId),
         updated_at: now,
       })
-      .where(eq(TeamPermissionProfileTable.id, existing.id))
+      .where(eq(TeamPermissionProfileTable.id, normalizeDenTypeId("teamPermissionProfile", existing.id)))
     return {
       ok: true,
       profile: {
@@ -260,11 +271,11 @@ export async function setTeamPermissionProfile(
   const id = createDenTypeId("teamPermissionProfile")
   await db.insert(TeamPermissionProfileTable).values({
     id,
-    team_id: teamId,
+    team_id: normalizeDenTypeId("team", teamId),
     profile: input.profile,
     default_mode: input.defaultMode,
     custom_rules: input.customRules ?? null,
-    updated_by: actor.memberId,
+    updated_by: normalizeDenTypeId("member", actor.memberId),
   })
 
   return {
@@ -317,12 +328,12 @@ export async function createStandingRule(
   const scopeIdValue = input.scope === "team" ? null : (input.scopeId ?? null)
   await db.insert(TeamStandingRuleTable).values({
     id,
-    team_id: input.teamId,
+    team_id: normalizeDenTypeId("team", input.teamId),
     scope: input.scope,
     scope_id: scopeIdValue,
     tool_name: input.toolName,
     target_pattern: input.targetPattern,
-    granted_by: grantedBy.memberId,
+    granted_by: normalizeDenTypeId("member", grantedBy.memberId),
     expires_at: input.expiresAt ?? null,
   })
 
@@ -366,10 +377,19 @@ export async function revokeStandingRule(
     }
   }
 
+  const parsedRuleId = parseDenTypeId("teamStandingRule", ruleId)
+  if (!parsedRuleId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `standing rule '${ruleId}' not found` },
+    }
+  }
+
   const existing = await db
     .select()
     .from(TeamStandingRuleTable)
-    .where(eq(TeamStandingRuleTable.id, ruleId))
+    .where(eq(TeamStandingRuleTable.id, parsedRuleId))
     .limit(1)
 
   if (!existing[0]) {
@@ -382,13 +402,13 @@ export async function revokeStandingRule(
 
   await db
     .update(TeamStandingRuleTable)
-    .set({ revoked_at: new Date(), revoked_by: revokedBy.memberId })
-    .where(eq(TeamStandingRuleTable.id, ruleId))
+    .set({ revoked_at: new Date(), revoked_by: normalizeDenTypeId("member", revokedBy.memberId) })
+    .where(eq(TeamStandingRuleTable.id, parsedRuleId))
 
   const updated = await db
     .select()
     .from(TeamStandingRuleTable)
-    .where(eq(TeamStandingRuleTable.id, ruleId))
+    .where(eq(TeamStandingRuleTable.id, parsedRuleId))
     .limit(1)
 
   return { ok: true, rule: updated[0] ? rowToStandingRule(updated[0]) : rowToStandingRule(existing[0]) }
@@ -398,7 +418,9 @@ export async function listStandingRules(
   teamId: string,
   filter?: { scope?: string; scopeId?: string; toolName?: string },
 ): Promise<StandingRuleRow[]> {
-  const conditions = [eq(TeamStandingRuleTable.team_id, teamId)]
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
+  const conditions = [eq(TeamStandingRuleTable.team_id, parsedTeamId)]
   if (filter?.scope) conditions.push(eq(TeamStandingRuleTable.scope, filter.scope as "team" | "agent" | "task"))
   if (filter?.scopeId) conditions.push(eq(TeamStandingRuleTable.scope_id, filter.scopeId))
   if (filter?.toolName) conditions.push(eq(TeamStandingRuleTable.tool_name, filter.toolName))
@@ -419,10 +441,15 @@ export async function checkRoleContract(
   agentId: string,
   toolName: string,
 ): Promise<{ allowed: boolean; forbiddenAction?: string }> {
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    // agent 不存在视为无契约 → 允许（其他层会处理）
+    return { allowed: true }
+  }
   const rows = await db
     .select({ forbidden_actions: TeamAgentTable.forbidden_actions })
     .from(TeamAgentTable)
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, parsedAgentId))
     .limit(1)
 
   if (!rows[0]) {
@@ -444,6 +471,8 @@ export async function checkRoleContract(
 export async function findMatchingStandingRule(
   request: ToolCallRequest,
 ): Promise<StandingRuleRow | null> {
+  const parsedTeamId = parseDenTypeId("team", request.teamId)
+  if (!parsedTeamId) return null
   // P7: scope='task' 的规则只对 scope_id 指定的 task 生效
   // 查询：team 级 + (agent 级且 scope_id=agentId) + (task 级且 scope_id=taskId)
   const scopeConditions = or(
@@ -459,7 +488,7 @@ export async function findMatchingStandingRule(
     .from(TeamStandingRuleTable)
     .where(
       and(
-        eq(TeamStandingRuleTable.team_id, request.teamId),
+        eq(TeamStandingRuleTable.team_id, parsedTeamId),
         eq(TeamStandingRuleTable.tool_name, request.toolName),
         isNull(TeamStandingRuleTable.revoked_at),
         scopeConditions,
@@ -486,10 +515,14 @@ export async function findMatchingStandingRule(
 export async function checkBudget(
   teamId: string,
 ): Promise<{ exceeded: boolean; usedTokens: number; totalTokens: number }> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) {
+    return { exceeded: false, usedTokens: 0, totalTokens: 0 }
+  }
   const rows = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, teamId))
+    .where(eq(TeamBudgetTable.team_id, parsedTeamId))
     .limit(1)
 
   if (!rows[0]) {

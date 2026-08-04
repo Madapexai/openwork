@@ -29,7 +29,16 @@ import {
   TeamAutomationRunTable,
   TeamAutomationTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -197,6 +206,7 @@ export type CreateAlertInput = {
 export type CreateAlertResult =
   | { ok: true; alert: AlertRow }
   | { ok: false; status: 400; response: { code: "MISSING_ALERT_FIELDS"; missing: string[] } }
+  | { ok: false; status: 400; response: { code: string; message: string } }
 
 export type AcknowledgeAlertResult =
   | { ok: true; alert: AlertRow }
@@ -506,11 +516,11 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Cr
   try {
     await db.insert(TeamAutomationTable).values({
       id,
-      team_id: input.teamId,
+      team_id: normalizeDenTypeId("team", input.teamId),
       name: input.name,
       cron_expr: input.cronExpr,
       message: input.message,
-      agent_id: input.agentId ?? null,
+      agent_id: input.agentId ? normalizeDenTypeId("teamAgent", input.agentId) : null,
       scoped_approvals: input.scopedApprovals ?? null,
       timezone: input.timezone ?? "Asia/Shanghai",
       // I2: 默认 ready_for_schedule=false, manual_run_count=0
@@ -524,8 +534,8 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Cr
       retry_policy: (input.retryPolicy as Record<string, unknown>) ?? null,
       delivery_targets: input.deliveryTargets ?? null,
       max_cost_cents_per_run: input.maxCostCentsPerRun ?? null,
-      owner_member_id: input.ownerMemberId,
-      created_by: input.createdBy,
+      owner_member_id: normalizeDenTypeId("member", input.ownerMemberId),
+      created_by: normalizeDenTypeId("member", input.createdBy),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -555,10 +565,19 @@ export async function updateAutomation(
   automationId: string,
   input: UpdateAutomationInput,
 ): Promise<CreateAutomationResult> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) {
+    return {
+      ok: false,
+      status: 400,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+
   const existing = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!existing[0]) {
     return {
@@ -580,7 +599,7 @@ export async function updateAutomation(
     }
   }
   if (input.message !== undefined) updates.message = input.message
-  if (input.agentId !== undefined) updates.agent_id = input.agentId
+  if (input.agentId !== undefined) updates.agent_id = normalizeDenTypeId("teamAgent", input.agentId)
   if (input.timezone !== undefined) updates.timezone = input.timezone
   if (input.skipOnOverlap !== undefined) updates.skip_on_overlap = input.skipOnOverlap
   if (input.runOnceCatchUp !== undefined) updates.run_once_catch_up = input.runOnceCatchUp
@@ -588,14 +607,14 @@ export async function updateAutomation(
   if (input.retryPolicy !== undefined) updates.retry_policy = input.retryPolicy as Record<string, unknown>
   if (input.deliveryTargets !== undefined) updates.delivery_targets = input.deliveryTargets
   if (input.maxCostCentsPerRun !== undefined) updates.max_cost_cents_per_run = input.maxCostCentsPerRun
-  if (input.ownerMemberId !== undefined) updates.owner_member_id = input.ownerMemberId
+  if (input.ownerMemberId !== undefined) updates.owner_member_id = normalizeDenTypeId("member", input.ownerMemberId)
 
-  await db.update(TeamAutomationTable).set(updates).where(eq(TeamAutomationTable.id, automationId))
+  await db.update(TeamAutomationTable).set(updates).where(eq(TeamAutomationTable.id, parsedId))
 
   const rows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -615,10 +634,19 @@ export async function enableSchedule(
   automationId: string,
   enabled: boolean,
 ): Promise<EnableScheduleResult> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -651,12 +679,12 @@ export async function enableSchedule(
     }
   }
 
-  await db.update(TeamAutomationTable).set(updates).where(eq(TeamAutomationTable.id, automationId))
+  await db.update(TeamAutomationTable).set(updates).where(eq(TeamAutomationTable.id, parsedId))
 
   const updated = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!updated[0]) {
     return {
@@ -673,10 +701,19 @@ export async function enableSchedule(
 // ============================================================
 
 export async function manualRun(automationId: string): Promise<ManualRunResult> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -698,7 +735,7 @@ export async function manualRun(automationId: string): Promise<ManualRunResult> 
   const now = new Date()
   await db.insert(TeamAutomationRunTable).values({
     id: runId,
-    automation_id: automationId,
+    automation_id: parsedId,
     batch_id: batchId,
     status: "waiting_trigger",
     state: { completed_steps: [], current: "waiting_trigger", manual: true },
@@ -715,7 +752,7 @@ export async function manualRun(automationId: string): Promise<ManualRunResult> 
       last_run_at: now,
       updated_at: now,
     })
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
 
   const runRows = await db
     .select()
@@ -744,13 +781,22 @@ export async function manualRun(automationId: string): Promise<ManualRunResult> 
 // ============================================================
 
 export async function startRun(input: StartRunInput): Promise<StartRunResult> {
+  const parsedAutomationId = parseDenTypeId("teamAutomation", input.automationId)
+  if (!parsedAutomationId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${input.automationId} not found` },
+    }
+  }
+
   // 先查是否已有同 batch_id 的 run
   const existing = await db
     .select()
     .from(TeamAutomationRunTable)
     .where(
       and(
-        eq(TeamAutomationRunTable.automation_id, input.automationId),
+        eq(TeamAutomationRunTable.automation_id, parsedAutomationId),
         eq(TeamAutomationRunTable.batch_id, input.batchId),
       ),
     )
@@ -763,7 +809,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
   const autoRows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, input.automationId))
+    .where(eq(TeamAutomationTable.id, parsedAutomationId))
     .limit(1)
   if (!autoRows[0]) {
     return {
@@ -778,8 +824,8 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
   try {
     await db.insert(TeamAutomationRunTable).values({
       id: runId,
-      automation_id: input.automationId,
-      task_id: input.taskId ?? null,
+      automation_id: parsedAutomationId,
+      task_id: input.taskId ? normalizeDenTypeId("teamTask", input.taskId) : null,
       batch_id: input.batchId,
       status: "waiting_trigger",
       state: { completed_steps: [], current: "waiting_trigger" },
@@ -794,7 +840,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
         .from(TeamAutomationRunTable)
         .where(
           and(
-            eq(TeamAutomationRunTable.automation_id, input.automationId),
+            eq(TeamAutomationRunTable.automation_id, parsedAutomationId),
             eq(TeamAutomationRunTable.batch_id, input.batchId),
           ),
         )
@@ -810,7 +856,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
   await db
     .update(TeamAutomationTable)
     .set({ last_run_at: now, updated_at: now })
-    .where(eq(TeamAutomationTable.id, input.automationId))
+    .where(eq(TeamAutomationTable.id, parsedAutomationId))
 
   const rows = await db
     .select()
@@ -832,10 +878,12 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
 // ============================================================
 
 export async function getRun(runId: string): Promise<RunRow | null> {
+  const parsedRunId = parseDenTypeId("teamAutomationRun", runId)
+  if (!parsedRunId) return null
   const rows = await db
     .select()
     .from(TeamAutomationRunTable)
-    .where(eq(TeamAutomationRunTable.id, runId))
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
     .limit(1)
   return rows[0] ? rowToRun(rows[0]) : null
 }
@@ -848,10 +896,19 @@ export async function advanceRun(
   runId: string,
   input: AdvanceRunInput,
 ): Promise<AdvanceRunResult> {
+  const parsedRunId = parseDenTypeId("teamAutomationRun", runId)
+  if (!parsedRunId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `run ${runId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamAutomationRunTable)
-    .where(eq(TeamAutomationRunTable.id, runId))
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -880,7 +937,7 @@ export async function advanceRun(
   }
 
   // I6: 断点续跑 — 把 targetStatus 追加到 state.completed_steps（去重 + 顺序）
-  const prevState = (current.state as { completed_steps?: string[] } | null) ?? { completed_steps: [] }
+  const prevState = (current.state as { completed_steps?: string[]; source_status?: Record<string, SourceStatus> | null } | null) ?? { completed_steps: [] }
   const prevSteps = Array.isArray(prevState.completed_steps) ? prevState.completed_steps : []
   // 只追加前进态（非 blocked/failed）
   const isProgressState = !["blocked", "failed", "waiting_trigger"].includes(targetStatus)
@@ -898,7 +955,6 @@ export async function advanceRun(
   const updates: Partial<typeof TeamAutomationRunTable.$inferInsert> = {
     status: targetStatus,
     state: newState,
-    updated_at: new Date(),
   }
 
   // 降级 blocked 时强制 status=blocked（不进 delivering）
@@ -918,12 +974,12 @@ export async function advanceRun(
     updates.finished_at = new Date()
   }
 
-  await db.update(TeamAutomationRunTable).set(updates).where(eq(TeamAutomationRunTable.id, runId))
+  await db.update(TeamAutomationRunTable).set(updates).where(eq(TeamAutomationRunTable.id, parsedRunId))
 
   const updated = await db
     .select()
     .from(TeamAutomationRunTable)
-    .where(eq(TeamAutomationRunTable.id, runId))
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
     .limit(1)
 
   if (!updated[0]) {
@@ -961,10 +1017,19 @@ export async function failRun(
   runId: string,
   input: FailRunInput,
 ): Promise<FailRunResult> {
+  const parsedRunId = parseDenTypeId("teamAutomationRun", runId)
+  if (!parsedRunId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `run ${runId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamAutomationRunTable)
-    .where(eq(TeamAutomationRunTable.id, runId))
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -979,7 +1044,7 @@ export async function failRun(
   const autoRows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, current.automationId))
+    .where(eq(TeamAutomationTable.id, normalizeDenTypeId("teamAutomation", current.automationId)))
     .limit(1)
   const retryPolicy = (autoRows[0]?.retry_policy as RetryPolicy | null) ?? null
 
@@ -1014,9 +1079,8 @@ export async function failRun(
         error: `${input.errorCode}: ${input.errorMessage}`,
         state: newState,
         degradation_level: "blocked",
-        updated_at: now,
       })
-      .where(eq(TeamAutomationRunTable.id, runId))
+      .where(eq(TeamAutomationRunTable.id, parsedRunId))
   } else {
     // 不重试：status=failed（终态）
     const newState = {
@@ -1032,15 +1096,14 @@ export async function failRun(
         error: `${input.errorCode}: ${input.errorMessage}`,
         state: newState,
         finished_at: now,
-        updated_at: now,
       })
-      .where(eq(TeamAutomationRunTable.id, runId))
+      .where(eq(TeamAutomationRunTable.id, parsedRunId))
   }
 
   const updated = await db
     .select()
     .from(TeamAutomationRunTable)
-    .where(eq(TeamAutomationRunTable.id, runId))
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
     .limit(1)
 
   if (!updated[0]) {
@@ -1095,9 +1158,9 @@ export async function createAlert(input: CreateAlertInput): Promise<CreateAlertR
   const id = createDenTypeId("teamAutomationAlert")
   await db.insert(TeamAutomationAlertTable).values({
     id,
-    team_id: input.teamId,
-    automation_id: input.automationId,
-    run_id: input.runId ?? null,
+    team_id: normalizeDenTypeId("team", input.teamId),
+    automation_id: normalizeDenTypeId("teamAutomation", input.automationId),
+    run_id: input.runId ? normalizeDenTypeId("teamAutomationRun", input.runId) : null,
     trigger_time: input.triggerTime,
     severity: input.severity ?? "warning",
     failure_reason: input.failureReason,
@@ -1131,17 +1194,26 @@ export async function acknowledgeAlert(
   alertId: string,
   memberId: string,
 ): Promise<AcknowledgeAlertResult> {
+  const parsedAlertId = parseDenTypeId("teamAutomationAlert", alertId)
+  if (!parsedAlertId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `alert ${alertId} not found` },
+    }
+  }
+
   const now = new Date()
   await db
     .update(TeamAutomationAlertTable)
-    .set({ acknowledged_by: memberId, acknowledged_at: now })
-    .where(eq(TeamAutomationAlertTable.id, alertId))
+    .set({ acknowledged_by: normalizeDenTypeId("member", memberId), acknowledged_at: now })
+    .where(eq(TeamAutomationAlertTable.id, parsedAlertId))
 
   // 检查是否实际更新了行
   const rows = await db
     .select()
     .from(TeamAutomationAlertTable)
-    .where(eq(TeamAutomationAlertTable.id, alertId))
+    .where(eq(TeamAutomationAlertTable.id, parsedAlertId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -1164,10 +1236,18 @@ export async function listAlerts(filter: {
   delivered?: boolean
   acknowledged?: boolean
 }): Promise<AlertRow[]> {
+  const teamId = filter.teamId ? parseDenTypeId("team", filter.teamId) : undefined
+  const automationId = filter.automationId ? parseDenTypeId("teamAutomation", filter.automationId) : undefined
+  const runId = filter.runId ? parseDenTypeId("teamAutomationRun", filter.runId) : undefined
+  // 非法 typeid → 查不到 → 空结果（与原 eq(列, 非法字符串) 语义一致）
+  if ((filter.teamId && !teamId) || (filter.automationId && !automationId) || (filter.runId && !runId)) {
+    return []
+  }
+
   const conditions = []
-  if (filter.teamId) conditions.push(eq(TeamAutomationAlertTable.team_id, filter.teamId))
-  if (filter.automationId) conditions.push(eq(TeamAutomationAlertTable.automation_id, filter.automationId))
-  if (filter.runId) conditions.push(eq(TeamAutomationAlertTable.run_id, filter.runId))
+  if (teamId) conditions.push(eq(TeamAutomationAlertTable.team_id, teamId))
+  if (automationId) conditions.push(eq(TeamAutomationAlertTable.automation_id, automationId))
+  if (runId) conditions.push(eq(TeamAutomationAlertTable.run_id, runId))
   if (filter.delivered !== undefined) conditions.push(eq(TeamAutomationAlertTable.delivered, filter.delivered))
   if (filter.acknowledged === true) {
     conditions.push(sql`${TeamAutomationAlertTable.acknowledged_by} IS NOT NULL`)
@@ -1214,7 +1294,7 @@ export async function listDueAutomations(now: Date = new Date()): Promise<ListDu
         .from(TeamAutomationRunTable)
         .where(
           and(
-            eq(TeamAutomationRunTable.automation_id, automation.id),
+            eq(TeamAutomationRunTable.automation_id, normalizeDenTypeId("teamAutomation", automation.id)),
             // 未完成 = status 不在 completed/failed
             sql`${TeamAutomationRunTable.status} NOT IN ('completed', 'failed')`,
           ),
@@ -1237,10 +1317,12 @@ export async function listDueAutomations(now: Date = new Date()): Promise<ListDu
 // ============================================================
 
 export async function scheduleNextRun(automationId: string, from: Date = new Date()): Promise<void> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) return
   const rows = await db
     .select()
     .from(TeamAutomationTable)
-    .where(eq(TeamAutomationTable.id, automationId))
+    .where(eq(TeamAutomationTable.id, parsedId))
     .limit(1)
   if (!rows[0]) return
   const automation = rowToAutomation(rows[0])
@@ -1251,7 +1333,7 @@ export async function scheduleNextRun(automationId: string, from: Date = new Dat
     await db
       .update(TeamAutomationTable)
       .set({ next_run_at: nextRunAt, updated_at: new Date() })
-      .where(eq(TeamAutomationTable.id, automationId))
+      .where(eq(TeamAutomationTable.id, parsedId))
   } catch {
     // cron 解析失败，不更新
   }

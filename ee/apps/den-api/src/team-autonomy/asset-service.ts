@@ -22,7 +22,16 @@ import {
   TeamArtifactVersionTable,
   TeamTaskTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -166,12 +175,23 @@ function rowToVersion(row: typeof TeamArtifactVersionTable.$inferSelect): Artifa
 export async function createArtifact(input: CreateArtifactInput): Promise<CreateArtifactResult> {
   // I6: 跨团队 task_id 校验
   if (input.taskId) {
+    const parsedTaskId = parseDenTypeId("teamTask", input.taskId)
+    if (!parsedTaskId) {
+      return {
+        ok: false,
+        status: 400,
+        response: {
+          code: "CROSS_TEAM_TASK",
+          message: `task ${input.taskId} does not belong to team ${input.teamId}`,
+        },
+      }
+    }
     const taskRows = await db
       .select({ id: TeamTaskTable.id, teamId: TeamTaskTable.team_id })
       .from(TeamTaskTable)
-      .where(eq(TeamTaskTable.id, input.taskId))
+      .where(eq(TeamTaskTable.id, parsedTaskId))
       .limit(1)
-    if (!taskRows[0] || taskRows[0].team_id !== input.teamId) {
+    if (!taskRows[0] || taskRows[0].teamId !== input.teamId) {
       return {
         ok: false,
         status: 400,
@@ -186,8 +206,8 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Create
   const id = createDenTypeId("teamArtifact")
   await db.insert(TeamArtifactTable).values({
     id,
-    team_id: input.teamId,
-    task_id: input.taskId ?? null,
+    team_id: normalizeDenTypeId("team", input.teamId),
+    task_id: input.taskId ? normalizeDenTypeId("teamTask", input.taskId) : null,
     name: input.name,
     kind: input.kind,
     mime_type: input.mimeType ?? null,
@@ -230,7 +250,9 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Create
 // ============================================================
 
 export async function getArtifact(artifactId: string): Promise<ArtifactRow | null> {
-  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, artifactId)).limit(1)
+  const parsedArtifactId = parseDenTypeId("teamArtifact", artifactId)
+  if (!parsedArtifactId) return null
+  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, parsedArtifactId)).limit(1)
   return rows[0] ? rowToArtifact(rows[0]) : null
 }
 
@@ -243,7 +265,15 @@ export async function transitionArtifact(
   transition: ArtifactTransition,
   actor: Actor,
 ): Promise<TransitionResult> {
-  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, artifactId)).limit(1)
+  const parsedArtifactId = parseDenTypeId("teamArtifact", artifactId)
+  if (!parsedArtifactId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `artifact ${artifactId} not found` },
+    }
+  }
+  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, parsedArtifactId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -275,16 +305,16 @@ export async function transitionArtifact(
     updated_at: now,
   }
   if (targetStatus === "confirmed") {
-    updates.confirmed_by = (transition as { to: "confirmed"; confirmedBy: string }).confirmedBy
+    updates.confirmed_by = normalizeDenTypeId("member", (transition as { to: "confirmed"; confirmedBy: string }).confirmedBy)
     updates.confirmed_at = now
   }
 
-  await db.update(TeamArtifactTable).set(updates).where(eq(TeamArtifactTable.id, artifactId))
+  await db.update(TeamArtifactTable).set(updates).where(eq(TeamArtifactTable.id, parsedArtifactId))
 
   const updatedRows = await db
     .select()
     .from(TeamArtifactTable)
-    .where(eq(TeamArtifactTable.id, artifactId))
+    .where(eq(TeamArtifactTable.id, parsedArtifactId))
     .limit(1)
 
   return {
@@ -303,11 +333,15 @@ export async function listArtifactsForDownstream(
   filter?: { taskId?: string; kind?: ArtifactKindValue; producedBy?: ProducedBy },
 ): Promise<ArtifactRow[]> {
   // I3: 强制 status='confirmed'，无论调用方传入什么 filter
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
+  const parsedTaskId = filter?.taskId ? parseDenTypeId("teamTask", filter.taskId) : undefined
+  if (filter?.taskId && !parsedTaskId) return []
   const conditions = [
-    eq(TeamArtifactTable.team_id, teamId),
+    eq(TeamArtifactTable.team_id, parsedTeamId),
     eq(TeamArtifactTable.status, "confirmed"),
   ]
-  if (filter?.taskId) conditions.push(eq(TeamArtifactTable.task_id, filter.taskId))
+  if (parsedTaskId) conditions.push(eq(TeamArtifactTable.task_id, parsedTaskId))
   if (filter?.kind) conditions.push(eq(TeamArtifactTable.kind, filter.kind))
   if (filter?.producedBy) {
     conditions.push(eq(TeamArtifactTable.produced_by_type, filter.producedBy.type))
@@ -326,12 +360,14 @@ export async function listArtifactsByProducer(
   teamId: string,
   producer: ProducedBy,
 ): Promise<ArtifactRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamArtifactTable)
     .where(
       and(
-        eq(TeamArtifactTable.team_id, teamId),
+        eq(TeamArtifactTable.team_id, parsedTeamId),
         eq(TeamArtifactTable.produced_by_type, producer.type),
         eq(TeamArtifactTable.produced_by_id, producer.id),
       ),
@@ -347,7 +383,15 @@ export async function createArtifactVersion(
   artifactId: string,
   input: { storageUri: string; sizeBytes: number; changeSummary?: string; producedBy: ProducedBy },
 ): Promise<CreateVersionResult> {
-  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, artifactId)).limit(1)
+  const parsedArtifactId = parseDenTypeId("teamArtifact", artifactId)
+  if (!parsedArtifactId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `artifact ${artifactId} not found` },
+    }
+  }
+  const rows = await db.select().from(TeamArtifactTable).where(eq(TeamArtifactTable.id, parsedArtifactId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -360,14 +404,14 @@ export async function createArtifactVersion(
   const maxRows = await db
     .select({ maxVersion: sql<number>`MAX(${TeamArtifactVersionTable.version_number})` })
     .from(TeamArtifactVersionTable)
-    .where(eq(TeamArtifactVersionTable.artifact_id, artifactId))
+    .where(eq(TeamArtifactVersionTable.artifact_id, parsedArtifactId))
   const nextVersion = (Number(maxRows[0]?.maxVersion ?? 0) || 0) + 1
 
   const versionId = createDenTypeId("teamArtifactVersion")
   try {
     await db.insert(TeamArtifactVersionTable).values({
       id: versionId,
-      artifact_id: artifactId,
+      artifact_id: parsedArtifactId,
       version_number: nextVersion,
       storage_uri: input.storageUri,
       size_bytes: input.sizeBytes,
@@ -392,7 +436,7 @@ export async function createArtifactVersion(
   await db
     .update(TeamArtifactTable)
     .set({ current_version: nextVersion, status: "draft", updated_at: new Date() })
-    .where(eq(TeamArtifactTable.id, artifactId))
+    .where(eq(TeamArtifactTable.id, parsedArtifactId))
 
   return { ok: true, version: nextVersion }
 }
@@ -405,12 +449,14 @@ export async function getArtifactVersion(
   artifactId: string,
   version: number,
 ): Promise<ArtifactVersionRow | null> {
+  const parsedArtifactId = parseDenTypeId("teamArtifact", artifactId)
+  if (!parsedArtifactId) return null
   const rows = await db
     .select()
     .from(TeamArtifactVersionTable)
     .where(
       and(
-        eq(TeamArtifactVersionTable.artifact_id, artifactId),
+        eq(TeamArtifactVersionTable.artifact_id, parsedArtifactId),
         eq(TeamArtifactVersionTable.version_number, version),
       ),
     )

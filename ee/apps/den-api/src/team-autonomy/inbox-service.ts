@@ -16,7 +16,16 @@ import {
   TeamInboxStatus,
   TeamInboxTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型
@@ -165,9 +174,9 @@ export async function createInboxEntry(input: CreateInboxInput): Promise<CreateI
   try {
     await db.insert(TeamInboxTable).values({
       id,
-      team_id: input.teamId,
+      team_id: normalizeDenTypeId("team", input.teamId),
       session_id: input.sessionId ?? null,
-      task_id: input.taskId ?? null,
+      task_id: input.taskId ? normalizeDenTypeId("teamTask", input.taskId) : null,
       assignee_type: input.assigneeType,
       assignee_id: input.assigneeId,
       kind: input.kind,
@@ -222,12 +231,14 @@ export async function listPendingInbox(
   teamId: string,
   assignee: { type: InboxAssigneeType; id: string },
 ): Promise<InboxRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamInboxTable)
     .where(
       and(
-        eq(TeamInboxTable.team_id, teamId),
+        eq(TeamInboxTable.team_id, parsedTeamId),
         eq(TeamInboxTable.assignee_type, assignee.type),
         eq(TeamInboxTable.assignee_id, assignee.id),
         eq(TeamInboxTable.status, "pending"),
@@ -245,10 +256,18 @@ export async function resolveInboxEntry(
   resolution: InboxResolution,
   resolvedBy: { memberId: string },
 ): Promise<ResolveInboxResult> {
+  const parsedInboxId = parseDenTypeId("teamInbox", inboxId)
+  if (!parsedInboxId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `inbox entry '${inboxId}' not found` },
+    }
+  }
   const now = new Date()
 
   const updateValues: Partial<typeof TeamInboxTable.$inferInsert> = {
-    resolved_by: resolvedBy.memberId,
+    resolved_by: normalizeDenTypeId("member", resolvedBy.memberId),
     resolved_at: now,
     updated_at: now,
   }
@@ -269,7 +288,7 @@ export async function resolveInboxEntry(
   const updateResult = await db
     .update(TeamInboxTable)
     .set(updateValues)
-    .where(and(eq(TeamInboxTable.id, inboxId), eq(TeamInboxTable.status, "pending")))
+    .where(and(eq(TeamInboxTable.id, parsedInboxId), eq(TeamInboxTable.status, "pending")))
 
   const affectedRows = extractAffectedRows(updateResult)
 
@@ -278,7 +297,7 @@ export async function resolveInboxEntry(
     const current = await db
       .select()
       .from(TeamInboxTable)
-      .where(eq(TeamInboxTable.id, inboxId))
+      .where(eq(TeamInboxTable.id, parsedInboxId))
       .limit(1)
 
     if (!current[0]) {
@@ -303,7 +322,7 @@ export async function resolveInboxEntry(
   const updated = await db
     .select()
     .from(TeamInboxTable)
-    .where(eq(TeamInboxTable.id, inboxId))
+    .where(eq(TeamInboxTable.id, parsedInboxId))
     .limit(1)
 
   return { ok: true, entry: rowToInbox(updated[0]) }
@@ -325,10 +344,12 @@ export async function findInboxByExternalToolCallId(
 }
 
 export async function findInboxById(inboxId: string): Promise<InboxRow | null> {
+  const parsedInboxId = parseDenTypeId("teamInbox", inboxId)
+  if (!parsedInboxId) return null
   const rows = await db
     .select()
     .from(TeamInboxTable)
-    .where(eq(TeamInboxTable.id, inboxId))
+    .where(eq(TeamInboxTable.id, parsedInboxId))
     .limit(1)
   return rows[0] ? rowToInbox(rows[0]) : null
 }

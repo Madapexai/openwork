@@ -24,7 +24,16 @@ import {
   TeamRoleTable,
   TeamTaskTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -215,10 +224,21 @@ async function assertRoleInTeam(
   roleId: string | undefined,
 ): Promise<{ ok: true } | { ok: false; status: 400; response: { code: string; message: string } }> {
   if (!roleId) return { ok: true }
+  const parsedRoleId = parseDenTypeId("teamRole", roleId)
+  if (!parsedRoleId) {
+    return {
+      ok: false,
+      status: 400,
+      response: {
+        code: "CROSS_TEAM_ROLE",
+        message: `role ${roleId} does not belong to team ${teamId}`,
+      },
+    }
+  }
   const rows = await db
     .select({ id: TeamRoleTable.id, team_id: TeamRoleTable.team_id })
     .from(TeamRoleTable)
-    .where(eq(TeamRoleTable.id, roleId))
+    .where(eq(TeamRoleTable.id, parsedRoleId))
     .limit(1)
   if (!rows[0] || rows[0].team_id !== teamId) {
     return {
@@ -284,10 +304,10 @@ export async function createAgent(input: CreateAgentInput, actor: Actor): Promis
   const id = createDenTypeId("teamAgent")
   await db.insert(TeamAgentTable).values({
     id,
-    team_id: input.teamId,
+    team_id: normalizeDenTypeId("team", input.teamId),
     name: input.name,
     engine: input.engine,
-    role_id: input.roleId ?? null,
+    role_id: input.roleId ? normalizeDenTypeId("teamRole", input.roleId) : null,
     persona: input.persona ?? null,
     skills: input.skills ?? null,
     connectors: input.connectors ?? null,
@@ -318,7 +338,15 @@ export async function updateAgent(
   patch: UpdateAgentInput,
   actor: Actor,
 ): Promise<UpdateAgentResult> {
-  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -371,16 +399,16 @@ export async function updateAgent(
   const updates: Partial<typeof TeamAgentTable.$inferInsert> = { updated_at: new Date() }
   if (patch.name !== undefined) updates.name = patch.name
   if (patch.engine !== undefined) updates.engine = patch.engine
-  if (patch.roleId !== undefined) updates.role_id = patch.roleId || null
+  if (patch.roleId !== undefined) updates.role_id = patch.roleId ? normalizeDenTypeId("teamRole", patch.roleId) : null
   if (patch.persona !== undefined) updates.persona = patch.persona ?? null
   if (patch.skills !== undefined) updates.skills = patch.skills
   if (patch.connectors !== undefined) updates.connectors = patch.connectors
   if (patch.modelDefault !== undefined) updates.model_default = patch.modelDefault ?? null
   if (patch.forbiddenActions !== undefined) updates.forbidden_actions = patch.forbiddenActions
 
-  await db.update(TeamAgentTable).set(updates).where(eq(TeamAgentTable.id, agentId))
+  await db.update(TeamAgentTable).set(updates).where(eq(TeamAgentTable.id, parsedAgentId))
 
-  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   return { ok: true, agent: updated[0] ? rowToAgent(updated[0]) : current }
 }
 
@@ -397,7 +425,16 @@ export async function deleteAgent(agentId: string, actor: Actor): Promise<Delete
     }
   }
 
-  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+
+  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -418,7 +455,7 @@ export async function deleteAgent(agentId: string, actor: Actor): Promise<Delete
     }
   }
 
-  await db.delete(TeamAgentTable).where(eq(TeamAgentTable.id, agentId))
+  await db.delete(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId))
   return { ok: true }
 }
 
@@ -449,7 +486,15 @@ export async function resumeAgent(agentId: string, actor: Actor): Promise<PauseR
 }
 
 async function transitionStatus(agentId: string, to: AgentStatus): Promise<PauseResumeResult> {
-  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -488,9 +533,9 @@ async function transitionStatus(agentId: string, to: AgentStatus): Promise<Pause
   await db
     .update(TeamAgentTable)
     .set({ status: targetStatus, updated_at: new Date() })
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, parsedAgentId))
 
-  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   return { ok: true, agent: updated[0] ? rowToAgent(updated[0]) : rowToAgent(existing[0]) }
 }
 
@@ -507,7 +552,24 @@ export async function assignTask(agentId: string, taskId: string, actor: Actor):
     }
   }
 
-  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 400,
+      response: { code: "TASK_NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -532,7 +594,7 @@ export async function assignTask(agentId: string, taskId: string, actor: Actor):
   const taskRows = await db
     .select({ id: TeamTaskTable.id, team_id: TeamTaskTable.team_id })
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
     .limit(1)
   if (!taskRows[0]) {
     return {
@@ -568,16 +630,16 @@ export async function assignTask(agentId: string, taskId: string, actor: Actor):
   // 原子更新 TeamAgentTable.current_task_id + status=busy
   await db
     .update(TeamAgentTable)
-    .set({ current_task_id: taskId, status: "busy", updated_at: new Date() })
-    .where(eq(TeamAgentTable.id, agentId))
+    .set({ current_task_id: parsedTaskId, status: "busy", updated_at: new Date() })
+    .where(eq(TeamAgentTable.id, parsedAgentId))
 
   // 同步 TeamTaskTable.assignee_*（task 被分配给 agent）
   await db
     .update(TeamTaskTable)
     .set({ assignee_type: "agent", assignee_id: agentId, updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   return { ok: true, agent: updated[0] ? rowToAgent(updated[0]) : rowToAgent(existing[0]) }
 }
 
@@ -590,7 +652,16 @@ export async function unassignTask(agentId: string, actor: Actor): Promise<Unass
     }
   }
 
-  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `agent ${agentId} not found` },
+    }
+  }
+
+  const existing = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   if (!existing[0]) {
     return {
       ok: false,
@@ -614,9 +685,9 @@ export async function unassignTask(agentId: string, actor: Actor): Promise<Unass
   await db
     .update(TeamAgentTable)
     .set({ current_task_id: null, status: "idle", updated_at: new Date() })
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, parsedAgentId))
 
-  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const updated = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   return { ok: true, agent: updated[0] ? rowToAgent(updated[0]) : rowToAgent(existing[0]) }
 }
 
@@ -625,12 +696,16 @@ export async function unassignTask(agentId: string, actor: Actor): Promise<Unass
 // ============================================================
 
 export async function listByTeam(teamId: string): Promise<AgentRow[]> {
-  const rows = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.team_id, teamId))
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
+  const rows = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.team_id, parsedTeamId))
   return rows.map(rowToAgent)
 }
 
 export async function getById(agentId: string): Promise<AgentRow | null> {
-  const rows = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, agentId)).limit(1)
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) return null
+  const rows = await db.select().from(TeamAgentTable).where(eq(TeamAgentTable.id, parsedAgentId)).limit(1)
   return rows[0] ? rowToAgent(rows[0]) : null
 }
 
@@ -643,10 +718,16 @@ export async function checkForbiddenAction(
   actionName: string,
   opts?: { glob?: boolean },
 ): Promise<ForbiddenCheck> {
+  const parsedAgentId = parseDenTypeId("teamAgent", agentId)
+  if (!parsedAgentId) {
+    // agent 不存在 → exists=false，forbidden=false（其他层处理）
+    return { forbidden: false, exists: false }
+  }
+
   const rows = await db
     .select({ forbidden_actions: TeamAgentTable.forbidden_actions })
     .from(TeamAgentTable)
-    .where(eq(TeamAgentTable.id, agentId))
+    .where(eq(TeamAgentTable.id, parsedAgentId))
     .limit(1)
 
   if (!rows[0]) {

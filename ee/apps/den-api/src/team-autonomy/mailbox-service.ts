@@ -22,7 +22,16 @@ import {
   TeamMailboxTable,
   TeamMemberTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -152,13 +161,16 @@ async function assertRecipientInTeam(
   }
 
   if (recipientType === "agent") {
+    const parsedRecipientId = parseDenTypeId("teamAgent", recipientId)
+    const parsedTeamId = parseDenTypeId("team", teamId)
+    if (!parsedRecipientId || !parsedTeamId) return { ok: true, existsInTeam: false }
     const rows = await db
       .select({ id: TeamAgentTable.id })
       .from(TeamAgentTable)
       .where(
         and(
-          eq(TeamAgentTable.id, recipientId),
-          eq(TeamAgentTable.team_id, teamId),
+          eq(TeamAgentTable.id, parsedRecipientId),
+          eq(TeamAgentTable.team_id, parsedTeamId),
         ),
       )
       .limit(1)
@@ -167,13 +179,16 @@ async function assertRecipientInTeam(
 
   if (recipientType === "member") {
     // TeamMemberTable.teamId / orgMembershipId 是 camelCase
+    const parsedTeamId = parseDenTypeId("team", teamId)
+    const parsedRecipientId = parseDenTypeId("member", recipientId)
+    if (!parsedTeamId || !parsedRecipientId) return { ok: true, existsInTeam: false }
     const rows = await db
       .select({ id: TeamMemberTable.id })
       .from(TeamMemberTable)
       .where(
         and(
-          eq(TeamMemberTable.teamId, teamId),
-          eq(TeamMemberTable.orgMembershipId, recipientId),
+          eq(TeamMemberTable.teamId, parsedTeamId),
+          eq(TeamMemberTable.orgMembershipId, parsedRecipientId),
         ),
       )
       .limit(1)
@@ -223,7 +238,7 @@ export async function sendMessage(
   const id = createDenTypeId("teamMailbox")
   await db.insert(TeamMailboxTable).values({
     id,
-    team_id: input.teamId,
+    team_id: normalizeDenTypeId("team", input.teamId),
     recipient_type: input.recipientType,
     recipient_id: input.recipientId,
     sender_type: input.senderType,
@@ -232,7 +247,7 @@ export async function sendMessage(
     subject: input.subject ?? null,
     body: input.body ?? null,
     attachment_refs: input.attachmentRefs ?? null,
-    related_task_id: input.relatedTaskId ?? null,
+    related_task_id: input.relatedTaskId ? normalizeDenTypeId("teamTask", input.relatedTaskId) : null,
     read_at: null,
   })
 
@@ -277,13 +292,21 @@ export async function markRead(
       response: { code: "NOT_FOUND", message: `mailbox message ${messageId} not found` },
     }
   }
+  const parsedMessageId = parseDenTypeId("teamMailbox", messageId)
+  if (!parsedMessageId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `mailbox message ${messageId} not found` },
+    }
+  }
 
   // I1: actor 提供时校验收件人身份
   if (actor) {
     const existing = await db
       .select()
       .from(TeamMailboxTable)
-      .where(eq(TeamMailboxTable.id, messageId))
+      .where(eq(TeamMailboxTable.id, parsedMessageId))
       .limit(1)
     if (!existing[0]) {
       return {
@@ -308,7 +331,7 @@ export async function markRead(
   const updateResult = await db
     .update(TeamMailboxTable)
     .set({ read_at: now })
-    .where(eq(TeamMailboxTable.id, messageId))
+    .where(eq(TeamMailboxTable.id, parsedMessageId))
 
   const affected = extractAffectedRows(updateResult)
   if (affected === 0) {
@@ -316,7 +339,7 @@ export async function markRead(
     const existing = await db
       .select()
       .from(TeamMailboxTable)
-      .where(eq(TeamMailboxTable.id, messageId))
+      .where(eq(TeamMailboxTable.id, parsedMessageId))
       .limit(1)
     if (!existing[0]) {
       return {
@@ -332,7 +355,7 @@ export async function markRead(
   const updated = await db
     .select()
     .from(TeamMailboxTable)
-    .where(eq(TeamMailboxTable.id, messageId))
+    .where(eq(TeamMailboxTable.id, parsedMessageId))
     .limit(1)
 
   // affected > 0 时行必然存在；若极端情况下读不到，回退到查询一次
@@ -340,7 +363,7 @@ export async function markRead(
     const fallback = await db
       .select()
       .from(TeamMailboxTable)
-      .where(eq(TeamMailboxTable.id, messageId))
+      .where(eq(TeamMailboxTable.id, parsedMessageId))
       .limit(1)
     if (!fallback[0]) {
       return {
@@ -362,12 +385,14 @@ export async function listInbox(
   teamId: string,
   recipient: { type: MailboxRecipientTypeValue; id: string },
 ): Promise<MailboxRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamMailboxTable)
     .where(
       and(
-        eq(TeamMailboxTable.team_id, teamId),
+        eq(TeamMailboxTable.team_id, parsedTeamId),
         eq(TeamMailboxTable.recipient_type, recipient.type),
         eq(TeamMailboxTable.recipient_id, recipient.id),
       ),
@@ -380,12 +405,14 @@ export async function listSent(
   teamId: string,
   sender: { type: MailboxSenderTypeValue; id: string },
 ): Promise<MailboxRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamMailboxTable)
     .where(
       and(
-        eq(TeamMailboxTable.team_id, teamId),
+        eq(TeamMailboxTable.team_id, parsedTeamId),
         eq(TeamMailboxTable.sender_type, sender.type),
         eq(TeamMailboxTable.sender_id, sender.id),
       ),
@@ -399,10 +426,12 @@ export async function listSent(
 // ============================================================
 
 export async function getById(messageId: string): Promise<MailboxRow | null> {
+  const parsedMessageId = parseDenTypeId("teamMailbox", messageId)
+  if (!parsedMessageId) return null
   const rows = await db
     .select()
     .from(TeamMailboxTable)
-    .where(eq(TeamMailboxTable.id, messageId))
+    .where(eq(TeamMailboxTable.id, parsedMessageId))
     .limit(1)
   return rows[0] ? rowToMailbox(rows[0]) : null
 }
@@ -424,12 +453,14 @@ export async function listUnread(
   teamId: string,
   recipient: MailboxRecipient,
 ): Promise<MailboxRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamMailboxTable)
     .where(
       and(
-        eq(TeamMailboxTable.team_id, teamId),
+        eq(TeamMailboxTable.team_id, parsedTeamId),
         eq(TeamMailboxTable.recipient_type, recipient.type),
         eq(TeamMailboxTable.recipient_id, recipient.id),
         isNull(TeamMailboxTable.read_at),
@@ -444,13 +475,16 @@ export async function listByTask(
   taskId: string,
   teamId: string,
 ): Promise<MailboxRow[]> {
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTaskId || !parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamMailboxTable)
     .where(
       and(
-        eq(TeamMailboxTable.related_task_id, taskId),
-        eq(TeamMailboxTable.team_id, teamId),
+        eq(TeamMailboxTable.related_task_id, parsedTaskId),
+        eq(TeamMailboxTable.team_id, parsedTeamId),
       ),
     )
     .orderBy(desc(TeamMailboxTable.created_at))
@@ -462,12 +496,14 @@ export async function countUnread(
   teamId: string,
   recipient: MailboxRecipient,
 ): Promise<number> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return 0
   const rows = await db
     .select({ count: sql<number>`count(*)` })
     .from(TeamMailboxTable)
     .where(
       and(
-        eq(TeamMailboxTable.team_id, teamId),
+        eq(TeamMailboxTable.team_id, parsedTeamId),
         eq(TeamMailboxTable.recipient_type, recipient.type),
         eq(TeamMailboxTable.recipient_id, recipient.id),
         isNull(TeamMailboxTable.read_at),

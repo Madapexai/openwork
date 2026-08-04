@@ -23,7 +23,16 @@ import {
   TeamTaskTable,
   TeamPermissionProfileTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -241,7 +250,7 @@ async function teamRequiresPlanApproval(teamId: string): Promise<boolean> {
   const rows = await db
     .select({ default_mode: TeamPermissionProfileTable.default_mode })
     .from(TeamPermissionProfileTable)
-    .where(eq(TeamPermissionProfileTable.team_id, teamId))
+    .where(eq(TeamPermissionProfileTable.team_id, normalizeDenTypeId("team", teamId)))
     .limit(1)
   return rows[0]?.default_mode === "plan"
 }
@@ -254,7 +263,7 @@ async function loadDependencyGraph(teamId: string): Promise<Map<string, string[]
   const rows = await db
     .select({ id: TeamTaskTable.id, depends_on: TeamTaskTable.depends_on })
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.team_id, teamId))
+    .where(eq(TeamTaskTable.team_id, normalizeDenTypeId("team", teamId)))
   const edges = new Map<string, string[]>()
   for (const row of rows) {
     edges.set(row.id, row.depends_on ?? [])
@@ -279,15 +288,15 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   const columnId = input.columnId ?? "todo"
   await db.insert(TeamTaskTable).values({
     id,
-    team_id: input.teamId,
-    board_id: input.boardId ?? null,
+    team_id: normalizeDenTypeId("team", input.teamId),
+    board_id: input.boardId ? normalizeDenTypeId("teamBoard", input.boardId) : null,
     title: input.title,
     description: input.description ?? null,
     status: "todo",
     column_id: columnId,
     assignee_type: input.assignee.type,
     assignee_id: input.assignee.id,
-    created_by: input.createdBy,
+    created_by: normalizeDenTypeId("member", input.createdBy),
     priority: input.priority ?? "medium",
     depends_on: [],
     blocks: [],
@@ -316,7 +325,9 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
 // ============================================================
 
 export async function getTask(taskId: string): Promise<TaskRow | null> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) return null
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return rows[0] ? rowToTask(rows[0]) : null
 }
 
@@ -329,7 +340,16 @@ export async function updateStatus(
   to: TaskStatus,
   _actor: Actor,
 ): Promise<UpdateStatusResult> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -373,9 +393,9 @@ export async function updateStatus(
     updates.completed_at = now
   }
 
-  await db.update(TeamTaskTable).set(updates).where(eq(TeamTaskTable.id, taskId))
+  await db.update(TeamTaskTable).set(updates).where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return {
     ok: true,
     task: updated[0] ? rowToTask(updated[0]) : current,
@@ -392,7 +412,16 @@ export async function setPlan(
   plan: string,
   _actor: Actor,
 ): Promise<SetPlanResult> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -420,9 +449,9 @@ export async function setPlan(
       plan_approved_at: null,
       updated_at: new Date(),
     })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return { ok: true, task: updated[0] ? rowToTask(updated[0]) : current }
 }
 
@@ -431,7 +460,16 @@ export async function setPlan(
 // ============================================================
 
 export async function approvePlan(taskId: string, actor: Actor): Promise<ApprovePlanResult> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -460,13 +498,13 @@ export async function approvePlan(taskId: string, actor: Actor): Promise<Approve
     .update(TeamTaskTable)
     .set({
       plan_status: "approved",
-      plan_approved_by: actor.memberId,
+      plan_approved_by: normalizeDenTypeId("member", actor.memberId),
       plan_approved_at: now,
       updated_at: now,
     })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return { ok: true, task: updated[0] ? rowToTask(updated[0]) : current }
 }
 
@@ -479,7 +517,16 @@ export async function rejectPlan(
   actor: Actor,
   _reason?: string,
 ): Promise<ApprovePlanResult> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -504,9 +551,9 @@ export async function rejectPlan(
   await db
     .update(TeamTaskTable)
     .set({ plan_status: "rejected", updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return { ok: true, task: updated[0] ? rowToTask(updated[0]) : current }
 }
 
@@ -519,7 +566,16 @@ export async function requestRevision(
   actor: Actor,
   _reason?: string,
 ): Promise<ApprovePlanResult> {
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -545,9 +601,9 @@ export async function requestRevision(
   await db
     .update(TeamTaskTable)
     .set({ plan_status: "revision_requested", updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
-  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const updated = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   return { ok: true, task: updated[0] ? rowToTask(updated[0]) : current }
 }
 
@@ -592,7 +648,16 @@ export async function handoff(
     }
   }
 
-  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskId)).limit(1)
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  if (!parsedTaskId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${taskId} not found` },
+    }
+  }
+
+  const rows = await db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, parsedTaskId)).limit(1)
   if (!rows[0]) {
     return {
       ok: false,
@@ -606,7 +671,7 @@ export async function handoff(
   const handoffId = createDenTypeId("teamTaskHandoff")
   await db.insert(TeamTaskHandoffTable).values({
     id: handoffId,
-    task_id: taskId,
+    task_id: parsedTaskId,
     from_assignee_type: from.type,
     from_assignee_id: from.id,
     to_assignee_type: to.type,
@@ -623,7 +688,7 @@ export async function handoff(
       assignee_id: to.id,
       updated_at: new Date(),
     })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
   // 读取 handoff 行（拿到 handed_at 时间戳）
   const handoffRows = await db
@@ -635,7 +700,7 @@ export async function handoff(
   const updatedTaskRows = await db
     .select()
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
     .limit(1)
 
   return {
@@ -671,14 +736,24 @@ export async function addDependency(
     }
   }
 
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  const parsedDependsOnId = parseDenTypeId("teamTask", dependsOnId)
+  if (!parsedTaskId || !parsedDependsOnId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${!parsedTaskId ? taskId : dependsOnId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamTaskTable)
-    .where(inArray(TeamTaskTable.id, [taskId, dependsOnId]))
+    .where(inArray(TeamTaskTable.id, [parsedTaskId, parsedDependsOnId]))
     .limit(2)
 
-  const taskRow = rows.find((r) => r.id === taskId)
-  const dependsOnRow = rows.find((r) => r.id === dependsOnId)
+  const taskRow = rows.find((r) => r.id === parsedTaskId)
+  const dependsOnRow = rows.find((r) => r.id === parsedDependsOnId)
   if (!taskRow || !dependsOnRow) {
     return {
       ok: false,
@@ -730,7 +805,7 @@ export async function addDependency(
   await db
     .update(TeamTaskTable)
     .set({ depends_on: newDependsOn, updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
 
   // dependsOnTask.blocks += taskId
   const currentBlocks = dependsOnRow.blocks ?? []
@@ -738,17 +813,17 @@ export async function addDependency(
   await db
     .update(TeamTaskTable)
     .set({ blocks: newBlocks, updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, dependsOnId))
+    .where(eq(TeamTaskTable.id, parsedDependsOnId))
 
   const updatedTaskRows = await db
     .select()
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
     .limit(1)
   const updatedDependsOnRows = await db
     .select()
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.id, dependsOnId))
+    .where(eq(TeamTaskTable.id, parsedDependsOnId))
     .limit(1)
 
   return {
@@ -768,14 +843,24 @@ export async function removeDependency(
   taskId: string,
   dependsOnId: string,
 ): Promise<RemoveDependencyResult> {
+  const parsedTaskId = parseDenTypeId("teamTask", taskId)
+  const parsedDependsOnId = parseDenTypeId("teamTask", dependsOnId)
+  if (!parsedTaskId || !parsedDependsOnId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `task ${!parsedTaskId ? taskId : dependsOnId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(TeamTaskTable)
-    .where(inArray(TeamTaskTable.id, [taskId, dependsOnId]))
+    .where(inArray(TeamTaskTable.id, [parsedTaskId, parsedDependsOnId]))
     .limit(2)
 
-  const taskRow = rows.find((r) => r.id === taskId)
-  const dependsOnRow = rows.find((r) => r.id === dependsOnId)
+  const taskRow = rows.find((r) => r.id === parsedTaskId)
+  const dependsOnRow = rows.find((r) => r.id === parsedDependsOnId)
   if (!taskRow || !dependsOnRow) {
     return {
       ok: false,
@@ -791,16 +876,16 @@ export async function removeDependency(
   await db
     .update(TeamTaskTable)
     .set({ depends_on: newDependsOn, updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
   await db
     .update(TeamTaskTable)
     .set({ blocks: newBlocks, updated_at: new Date() })
-    .where(eq(TeamTaskTable.id, dependsOnId))
+    .where(eq(TeamTaskTable.id, parsedDependsOnId))
 
   const updatedRows = await db
     .select()
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.id, taskId))
+    .where(eq(TeamTaskTable.id, parsedTaskId))
     .limit(1)
 
   return {
@@ -814,10 +899,12 @@ export async function removeDependency(
 // ============================================================
 
 export async function listByBoard(boardId: string): Promise<TaskRow[]> {
+  const parsedBoardId = parseDenTypeId("teamBoard", boardId)
+  if (!parsedBoardId) return []
   const rows = await db
     .select()
     .from(TeamTaskTable)
-    .where(eq(TeamTaskTable.board_id, boardId))
+    .where(eq(TeamTaskTable.board_id, parsedBoardId))
   return rows.map(rowToTask)
 }
 
@@ -829,12 +916,14 @@ export async function listByAssignee(
   teamId: string,
   assignee: Assignee,
 ): Promise<TaskRow[]> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return []
   const rows = await db
     .select()
     .from(TeamTaskTable)
     .where(
       and(
-        eq(TeamTaskTable.team_id, teamId),
+        eq(TeamTaskTable.team_id, parsedTeamId),
         eq(TeamTaskTable.assignee_type, assignee.type),
         eq(TeamTaskTable.assignee_id, assignee.id),
       ),

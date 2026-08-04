@@ -33,7 +33,16 @@ import {
   SkillValidationTable,
   SkillValidationType,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -419,13 +428,13 @@ export async function createValidation(input: {
   try {
     await db.insert(SkillValidationTable).values({
       id,
-      team_id: input.teamId,
-      config_object_id: input.configObjectId,
+      team_id: normalizeDenTypeId("team", input.teamId),
+      config_object_id: normalizeDenTypeId("configObject", input.configObjectId),
       validation_type: input.validationType,
       status: "pending",
       evidence: null,
       reason: null,
-      reviewed_by: input.reviewer?.memberId ?? null,
+      reviewed_by: input.reviewer ? normalizeDenTypeId("member", input.reviewer.memberId) : null,
       reviewed_at: null,
     })
   } catch (error) {
@@ -457,10 +466,18 @@ export async function createValidation(input: {
 // ============================================================
 
 export async function startValidation(validationId: string): Promise<StartValidationResult> {
+  const parsedValidationId = parseDenTypeId("skillValidation", validationId)
+  if (!parsedValidationId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `validation ${validationId} not found` },
+    }
+  }
   const rows = await db
     .select()
     .from(SkillValidationTable)
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -473,12 +490,12 @@ export async function startValidation(validationId: string): Promise<StartValida
   await db
     .update(SkillValidationTable)
     .set({ status: "in_progress", updated_at: new Date() })
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
 
   const updated = await db
     .select()
     .from(SkillValidationTable)
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
     .limit(1)
   if (!updated[0]) {
     return {
@@ -502,10 +519,18 @@ export async function completeValidation(
     reviewer: { memberId: string }
   },
 ): Promise<CompleteValidationResult> {
+  const parsedValidationId = parseDenTypeId("skillValidation", validationId)
+  if (!parsedValidationId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `validation ${validationId} not found` },
+    }
+  }
   const rows = await db
     .select()
     .from(SkillValidationTable)
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -550,17 +575,17 @@ export async function completeValidation(
       status: newStatus,
       evidence,
       reason: input.reason ?? judge.reason,
-      reviewed_by: input.reviewer.memberId,
+      reviewed_by: normalizeDenTypeId("member", input.reviewer.memberId),
       reviewed_at: new Date(),
       updated_at: new Date(),
     })
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
 
   // 读回本条
   const updated = await db
     .select()
     .from(SkillValidationTable)
-    .where(eq(SkillValidationTable.id, validationId))
+    .where(eq(SkillValidationTable.id, parsedValidationId))
     .limit(1)
   if (!updated[0]) {
     return {
@@ -584,8 +609,8 @@ export async function completeValidation(
       .set({ status: "passed", updated_at: new Date() })
       .where(
         and(
-          eq(SkillValidationTable.team_id, current.teamId),
-          eq(SkillValidationTable.config_object_id, current.configObjectId),
+          eq(SkillValidationTable.team_id, normalizeDenTypeId("team", current.teamId)),
+          eq(SkillValidationTable.config_object_id, normalizeDenTypeId("configObject", current.configObjectId)),
         ),
       )
   }
@@ -630,8 +655,8 @@ export async function createTestCase(input: {
   try {
     await db.insert(SkillTestCaseTable).values({
       id,
-      team_id: input.teamId,
-      config_object_id: input.configObjectId,
+      team_id: normalizeDenTypeId("team", input.teamId),
+      config_object_id: normalizeDenTypeId("configObject", input.configObjectId),
       kind: input.kind,
       input: input.input,
       expected_behavior: input.expectedBehavior,
@@ -672,10 +697,18 @@ export async function runTestCase(
   testCaseId: string,
   executor: SkillTestExecutor,
 ): Promise<RunTestCaseResult> {
+  const parsedTestCaseId = parseDenTypeId("skillTestCase", testCaseId)
+  if (!parsedTestCaseId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `test case ${testCaseId} not found` },
+    }
+  }
   const rows = await db
     .select()
     .from(SkillTestCaseTable)
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -703,7 +736,7 @@ export async function runTestCase(
       last_run_at: now,
       updated_at: now,
     })
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
 
   // 诱饵测试评分规则：PASS +1 / FAIL -2（自动进化，覆盖式累加）
   const delta = passed ? 1 : -2
@@ -711,12 +744,12 @@ export async function runTestCase(
   await db
     .update(SkillTestCaseTable)
     .set({ darwin_score: prevScore + delta, updated_at: new Date() })
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
 
   const updated = await db
     .select()
     .from(SkillTestCaseTable)
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
     .limit(1)
   if (!updated[0]) {
     return {
@@ -749,10 +782,19 @@ export async function evaluateTestCase(
     }
   }
 
+  const parsedTestCaseId = parseDenTypeId("skillTestCase", testCaseId)
+  if (!parsedTestCaseId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `test case ${testCaseId} not found` },
+    }
+  }
+
   const rows = await db
     .select()
     .from(SkillTestCaseTable)
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
     .limit(1)
   if (!rows[0]) {
     return {
@@ -777,7 +819,7 @@ export async function evaluateTestCase(
       last_run_at: now,
       updated_at: now,
     })
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
 
   // 诱饵测试评分规则：PASS +1 / FAIL -2
   const delta = passed ? 1 : -2
@@ -785,12 +827,12 @@ export async function evaluateTestCase(
   await db
     .update(SkillTestCaseTable)
     .set({ darwin_score: prevScore + delta, updated_at: new Date() })
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
 
   const updated = await db
     .select()
     .from(SkillTestCaseTable)
-    .where(eq(SkillTestCaseTable.id, testCaseId))
+    .where(eq(SkillTestCaseTable.id, parsedTestCaseId))
     .limit(1)
   if (!updated[0]) {
     return {
@@ -829,9 +871,9 @@ export async function createSkillLink(input: {
   try {
     await db.insert(SkillLinkTable).values({
       id,
-      team_id: input.teamId,
-      source_config_object_id: input.sourceConfigObjectId,
-      target_config_object_id: input.targetConfigObjectId,
+      team_id: normalizeDenTypeId("team", input.teamId),
+      source_config_object_id: normalizeDenTypeId("configObject", input.sourceConfigObjectId),
+      target_config_object_id: normalizeDenTypeId("configObject", input.targetConfigObjectId),
       kind: input.kind,
       note: input.note ?? null,
     })
@@ -877,13 +919,16 @@ export async function listValidations(
   configObjectId: string,
   teamId: string,
 ): Promise<ValidationRow[]> {
+  const parsedConfigObjectId = parseDenTypeId("configObject", configObjectId)
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedConfigObjectId || !parsedTeamId) return []
   const rows = await db
     .select()
     .from(SkillValidationTable)
     .where(
       and(
-        eq(SkillValidationTable.config_object_id, configObjectId),
-        eq(SkillValidationTable.team_id, teamId),
+        eq(SkillValidationTable.config_object_id, parsedConfigObjectId),
+        eq(SkillValidationTable.team_id, parsedTeamId),
       ),
     )
   return rows.map(rowToValidation)
@@ -898,9 +943,12 @@ export async function listTestCases(
   teamId: string,
   filter?: { kind?: TestKind; status?: TestStatus },
 ): Promise<TestCaseRow[]> {
+  const parsedConfigObjectId = parseDenTypeId("configObject", configObjectId)
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedConfigObjectId || !parsedTeamId) return []
   const conditions = [
-    eq(SkillTestCaseTable.config_object_id, configObjectId),
-    eq(SkillTestCaseTable.team_id, teamId),
+    eq(SkillTestCaseTable.config_object_id, parsedConfigObjectId),
+    eq(SkillTestCaseTable.team_id, parsedTeamId),
   ]
   if (filter?.kind) conditions.push(eq(SkillTestCaseTable.kind, filter.kind))
   if (filter?.status) conditions.push(eq(SkillTestCaseTable.status, filter.status))

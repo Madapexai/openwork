@@ -22,7 +22,16 @@ import {
   TeamBudgetAllocationTable,
   TeamBudgetTable,
 } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { createDenTypeId, normalizeDenTypeId, type DenTypeId, type DenTypeIdName } from "@openwork-ee/utils/typeid"
+
+// 内部：非法 typeid 返回 null（保持"查不到 → 404/空结果"语义，避免 normalizeDenTypeId 抛异常）
+function parseDenTypeId<TName extends DenTypeIdName>(name: TName, value: string): DenTypeId<TName> | null {
+  try {
+    return normalizeDenTypeId(name, value)
+  } catch {
+    return null
+  }
+}
 
 // ============================================================
 // 类型导出
@@ -38,8 +47,8 @@ export type BudgetExceedReason = "tokens" | "cost"
 export type BudgetEntity = { type: BudgetEntityTypeValue; id: string }
 
 export type AllocationRow = {
-  id: string
-  budgetId: string
+  id: DenTypeId<"teamBudgetAllocation">
+  budgetId: DenTypeId<"teamBudget">
   entityType: BudgetEntityTypeValue
   entityId: string
   allocatedTokens: number
@@ -49,8 +58,8 @@ export type AllocationRow = {
 }
 
 export type BudgetRow = {
-  id: string
-  teamId: string
+  id: DenTypeId<"teamBudget">
+  teamId: DenTypeId<"team">
   period: BudgetPeriodValue
   totalTokens: number
   usedTokens: number
@@ -81,7 +90,7 @@ export type RecordUsageInput = {
 
 export type RecordUsageResult =
   | { ok: true; budget: BudgetRow; allocation?: AllocationRow }
-  | { ok: false; status: 404 | 409; response: { code: string; message: string } }
+  | { ok: false; status: 400 | 404 | 409; response: { code: string; message: string } }
 
 // P3-B: createBudget = allocateBudget 幂等 upsert
 export type CreateBudgetResult = AllocateBudgetResult
@@ -230,7 +239,7 @@ export async function allocateBudget(
     .from(TeamBudgetTable)
     .where(
       and(
-        eq(TeamBudgetTable.team_id, input.teamId),
+        eq(TeamBudgetTable.team_id, normalizeDenTypeId("team", input.teamId)),
         eq(TeamBudgetTable.period, input.period),
       ),
     )
@@ -262,7 +271,7 @@ export async function allocateBudget(
   const id = createDenTypeId("teamBudget")
   await db.insert(TeamBudgetTable).values({
     id,
-    team_id: input.teamId,
+    team_id: normalizeDenTypeId("team", input.teamId),
     period: input.period,
     total_tokens: input.totalTokens,
     used_tokens: 0,
@@ -292,10 +301,12 @@ export async function allocateBudget(
 // ============================================================
 
 export async function getBudget(teamId: string): Promise<BudgetRow | null> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return null
   const rows = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, teamId))
+    .where(eq(TeamBudgetTable.team_id, parsedTeamId))
     .limit(1)
   return rows[0] ? rowToBudget(rows[0]) : null
 }
@@ -384,7 +395,7 @@ async function recordTeamUsage(input: RecordUsageInput): Promise<RecordUsageResu
   const existing = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, input.teamId))
+    .where(eq(TeamBudgetTable.team_id, normalizeDenTypeId("team", input.teamId)))
     .limit(1)
 
   if (!existing[0]) {
@@ -468,7 +479,7 @@ async function recordEntityUsage(
   const budgets = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, teamId))
+    .where(eq(TeamBudgetTable.team_id, normalizeDenTypeId("team", teamId)))
     .limit(1)
   if (!budgets[0]) {
     return {
@@ -571,10 +582,12 @@ export async function resetBudgetIfDue(
   teamId: string,
   now: Date = new Date(),
 ): Promise<{ reset: boolean; budget?: BudgetRow }> {
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) return { reset: false }
   const existing = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, teamId))
+    .where(eq(TeamBudgetTable.team_id, parsedTeamId))
     .limit(1)
 
   if (!existing[0]) {
@@ -657,10 +670,18 @@ export async function allocateToEntity(
     }
   }
 
+  const parsedTeamId = parseDenTypeId("team", teamId)
+  if (!parsedTeamId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "BUDGET_NOT_FOUND", message: `no budget for team ${teamId}` },
+    }
+  }
   const budgets = await db
     .select()
     .from(TeamBudgetTable)
-    .where(eq(TeamBudgetTable.team_id, teamId))
+    .where(eq(TeamBudgetTable.team_id, parsedTeamId))
     .limit(1)
   if (!budgets[0]) {
     return {
@@ -741,12 +762,24 @@ export async function recordConsumption(
     }
   }
 
+  const parsedBudgetId = parseDenTypeId("teamBudget", budgetId)
+  if (!parsedBudgetId) {
+    return {
+      ok: false,
+      status: 404,
+      response: {
+        code: "ALLOCATION_NOT_FOUND",
+        message: `no allocation for ${entity.type}:${entity.id} under budget ${budgetId}`,
+      },
+    }
+  }
+
   const existing = await db
     .select()
     .from(TeamBudgetAllocationTable)
     .where(
       and(
-        eq(TeamBudgetAllocationTable.budget_id, budgetId),
+        eq(TeamBudgetAllocationTable.budget_id, parsedBudgetId),
         eq(TeamBudgetAllocationTable.entity_type, entity.type),
         eq(TeamBudgetAllocationTable.entity_id, entity.id),
       ),
@@ -808,9 +841,11 @@ export async function recordConsumption(
 // ============================================================
 
 export async function listAllocations(budgetId: string): Promise<AllocationRow[]> {
+  const parsedBudgetId = parseDenTypeId("teamBudget", budgetId)
+  if (!parsedBudgetId) return []
   const rows = await db
     .select()
     .from(TeamBudgetAllocationTable)
-    .where(eq(TeamBudgetAllocationTable.budget_id, budgetId))
+    .where(eq(TeamBudgetAllocationTable.budget_id, parsedBudgetId))
   return rows.map(rowToAllocation)
 }

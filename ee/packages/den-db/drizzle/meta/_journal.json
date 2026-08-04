@@ -351,6 +351,13 @@
       "when": 1785710592000,
       "tag": "0050_team_autonomy",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "5",
+      "when": 1785859690000,
+      "tag": "0051_team_agent_cli_engine",
+      "breakpoints": true
     }
   ]
 }

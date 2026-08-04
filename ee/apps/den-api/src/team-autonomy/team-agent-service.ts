@@ -18,6 +18,7 @@
 import { db } from "../db.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import {
+  EngineConfigProtocol,
   TeamAgentEngine,
   TeamAgentStatus,
   TeamAgentTable,
@@ -45,6 +46,16 @@ export type AgentEngine = typeof TeamAgentEngine[number]
 export type AgentStatus = typeof TeamAgentStatus[number]
 export type TeamRole = "owner" | "admin" | "editor" | "viewer"
 
+// engine='cli' 的启动/协议配置（openspec-team-agent-engine-cli.md 1.3）
+export type AgentEngineConfig = {
+  binary: string
+  args?: string[]
+  protocol?: EngineConfigProtocol
+  cwd?: string
+  env?: Record<string, string>
+  supported?: string[]
+}
+
 export type Actor = { memberId: string; role: TeamRole }
 
 export type AgentRow = {
@@ -52,6 +63,7 @@ export type AgentRow = {
   teamId: string
   name: string
   engine: AgentEngine
+  engineConfig: AgentEngineConfig | null
   roleId: string | null
   persona: string | null
   skills: string[] | null
@@ -69,6 +81,7 @@ export type CreateAgentInput = {
   teamId: string
   name: string
   engine: AgentEngine
+  engineConfig?: AgentEngineConfig
   roleId?: string
   persona?: string
   skills?: string[]
@@ -175,6 +188,52 @@ export function validateConfigObjectRefs(refs: unknown): boolean {
 }
 
 // ============================================================
+// 纯函数：engine_config 校验（openspec-team-agent-engine-cli.md I1/I2）
+// ============================================================
+
+// I1: engine='cli' 时 binary 必填（非空字符串）；非 cli engine 允许 engine_config 为空
+// I2: protocol 有值时必须 ∈ {pty, headless, jsonrpc}；engine='cli' 时 protocol 必填
+// 可选字段类型约束（宽松防御）：args/supported 数组、cwd 字符串、env 对象
+export function validateEngineConfig(engine: AgentEngine, config: unknown): boolean {
+  if (config === null || config === undefined) {
+    return engine !== "cli"
+  }
+  if (typeof config !== "object" || Array.isArray(config)) return false
+  const cfg = config as Record<string, unknown>
+
+  if (engine === "cli") {
+    if (typeof cfg.binary !== "string" || cfg.binary.trim().length === 0) return false
+    if (cfg.protocol === undefined || cfg.protocol === null) return false
+  }
+  if (cfg.protocol !== undefined && cfg.protocol !== null) {
+    if (!EngineConfigProtocol.includes(cfg.protocol as EngineConfigProtocol)) return false
+  }
+  if (cfg.args !== undefined && cfg.args !== null && !Array.isArray(cfg.args)) return false
+  if (cfg.supported !== undefined && cfg.supported !== null && !Array.isArray(cfg.supported)) return false
+  if (cfg.cwd !== undefined && cfg.cwd !== null && typeof cfg.cwd !== "string") return false
+  if (
+    cfg.env !== undefined &&
+    cfg.env !== null &&
+    (typeof cfg.env !== "object" || Array.isArray(cfg.env))
+  ) {
+    return false
+  }
+  return true
+}
+
+// 内部：engine_config 校验错误响应（I1/I2 执行点）
+function engineConfigError(): { ok: false; status: 400; response: { code: string; message: string } } {
+  return {
+    ok: false,
+    status: 400,
+    response: {
+      code: "INVALID_ENGINE_CONFIG",
+      message: "engine='cli' requires engine_config with non-empty binary and protocol (pty|headless|jsonrpc)",
+    },
+  }
+}
+
+// ============================================================
 // 内部：actor 权限校验
 // ============================================================
 
@@ -201,6 +260,7 @@ function rowToAgent(row: typeof TeamAgentTable.$inferSelect): AgentRow {
     teamId: row.team_id,
     name: row.name,
     engine: row.engine,
+    engineConfig: row.engine_config ?? null,
     roleId: row.role_id,
     persona: row.persona,
     skills: row.skills,
@@ -297,6 +357,11 @@ export async function createAgent(input: CreateAgentInput, actor: Actor): Promis
   const refsCheck = validateRefsInInput(input)
   if (!refsCheck.ok) return refsCheck
 
+  // I1/I2: engine_config 校验（engine='cli' 时 binary + protocol 必填）
+  if (!validateEngineConfig(input.engine, input.engineConfig)) {
+    return engineConfigError()
+  }
+
   // I3: role_id 同 team 校验
   const roleCheck = await assertRoleInTeam(input.teamId, input.roleId)
   if (!roleCheck.ok) return roleCheck
@@ -307,6 +372,7 @@ export async function createAgent(input: CreateAgentInput, actor: Actor): Promis
     team_id: normalizeDenTypeId("team", input.teamId),
     name: input.name,
     engine: input.engine,
+    engine_config: input.engineConfig ?? null,
     role_id: input.roleId ? normalizeDenTypeId("teamRole", input.roleId) : null,
     persona: input.persona ?? null,
     skills: input.skills ?? null,
@@ -390,6 +456,15 @@ export async function updateAgent(
   const refsCheck = validateRefsInInput(patch)
   if (!refsCheck.ok) return refsCheck
 
+  // I1/I2: engine_config 校验（合并后的 engine + engine_config 必须满足契约）
+  if (patch.engineConfig !== undefined || patch.engine !== undefined) {
+    const nextEngine = patch.engine ?? current.engine
+    const nextEngineConfig = patch.engineConfig !== undefined ? patch.engineConfig : current.engineConfig
+    if (!validateEngineConfig(nextEngine, nextEngineConfig)) {
+      return engineConfigError()
+    }
+  }
+
   // I3: role_id 同 team 校验
   if (patch.roleId !== undefined) {
     const roleCheck = await assertRoleInTeam(current.teamId, patch.roleId)
@@ -399,6 +474,7 @@ export async function updateAgent(
   const updates: Partial<typeof TeamAgentTable.$inferInsert> = { updated_at: new Date() }
   if (patch.name !== undefined) updates.name = patch.name
   if (patch.engine !== undefined) updates.engine = patch.engine
+  if (patch.engineConfig !== undefined) updates.engine_config = patch.engineConfig ?? null
   if (patch.roleId !== undefined) updates.role_id = patch.roleId ? normalizeDenTypeId("teamRole", patch.roleId) : null
   if (patch.persona !== undefined) updates.persona = patch.persona ?? null
   if (patch.skills !== undefined) updates.skills = patch.skills

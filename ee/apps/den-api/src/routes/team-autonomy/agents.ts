@@ -7,7 +7,7 @@ import { describeRoute } from "hono-openapi"
 import { z } from "zod"
 import { db } from "../../db.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
-import { TeamAgentTable, TeamAgentEngine } from "@openwork-ee/den-db/schema"
+import { TeamAgentTable, TeamAgentEngine, EngineConfigProtocol } from "@openwork-ee/den-db/schema"
 import * as agentService from "../../team-autonomy/team-agent-service.js"
 import {
   actorFromContext,
@@ -29,9 +29,20 @@ import { jsonValidator, paramValidator } from "../../middleware/index.js"
 
 const engineSchema = z.enum(TeamAgentEngine)
 
+// engine_config（engine='cli' 时 binary + protocol 必填；service 层 validateEngineConfig 兜底）
+const engineConfigSchema = z.object({
+  binary: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  protocol: z.enum(EngineConfigProtocol).optional(),
+  cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  supported: z.array(z.string()).optional(),
+})
+
 const createAgentSchema = z.object({
   name: z.string().trim().min(1).max(128),
   engine: engineSchema,
+  engineConfig: engineConfigSchema.optional(),
   roleId: denTypeIdSchema("teamRole").optional(),
   persona: z.string().optional(),
   skills: z.array(z.string()).optional(),
@@ -43,6 +54,7 @@ const createAgentSchema = z.object({
 const updateAgentSchema = z.object({
   name: z.string().trim().min(1).max(128).optional(),
   engine: engineSchema.optional(),
+  engineConfig: engineConfigSchema.nullable().optional(),
   roleId: denTypeIdSchema("teamRole").nullable().optional(),
   persona: z.string().nullable().optional(),
   skills: z.array(z.string()).nullable().optional(),
@@ -57,6 +69,7 @@ const agentResponseSchema = z.object({
     teamId: z.string(),
     name: z.string(),
     engine: z.string(),
+    engineConfig: engineConfigSchema.nullable(),
     roleId: z.string().nullable(),
     persona: z.string().nullable(),
     skills: z.array(z.string()).nullable(),

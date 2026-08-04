@@ -72,7 +72,23 @@ export const TeamRoleTable = mysqlTable(
 // 一个 Team 可挂多个 Agent（OpenWorker sidecar 实例）
 // WorkBuddy Bluebook Ch24：角色契约（输入 / 输出 / 禁止动作）
 export const TeamAgentStatus = ["idle", "busy", "paused", "offline", "error"] as const
-export const TeamAgentEngine = ["openworker", "opencode", "mcp", "generic"] as const
+// engine='cli' 表示通用 CLI agent 引擎（Kimi AtomCode / Freebuff / Claude Code 等），
+// 启动/协议信息存 engine_config（见 EngineConfigProtocol / TeamAgentEngineConfig）
+export const TeamAgentEngine = ["openworker", "opencode", "mcp", "generic", "cli"] as const
+
+// engine_config 协议类型：pty（伪终端）/ headless（无头）/ jsonrpc（JSON-RPC 通道）
+export const EngineConfigProtocol = ["pty", "headless", "jsonrpc"] as const
+export type EngineConfigProtocol = (typeof EngineConfigProtocol)[number]
+
+// engine='cli' 时 binary 必填、protocol 必填（见 openspec-team-agent-engine-cli.md I1/I2）
+export type TeamAgentEngineConfig = {
+  binary: string
+  args?: string[]
+  protocol?: EngineConfigProtocol
+  cwd?: string
+  env?: Record<string, string>
+  supported?: string[]
+}
 
 export const TeamAgentTable = mysqlTable(
   "team_agent",
@@ -81,6 +97,8 @@ export const TeamAgentTable = mysqlTable(
     team_id: denTypeIdColumn("team", "team_id").notNull(),
     name: varchar("name", { length: 128 }).notNull(),
     engine: mysqlEnum("engine", TeamAgentEngine).notNull().default("openworker"),
+    // 通用 CLI agent 引擎配置（engine='cli' 时必填 binary + protocol；可空）
+    engine_config: compatJsonColumn<TeamAgentEngineConfig | null>("engine_config"),
     role_id: denTypeIdColumn("teamRole", "role_id"),
     // persona 指令（人设 + 方法论）
     persona: text("persona"),

@@ -168,3 +168,15 @@ GREEN 后（DB 可用）验证：
 - 错误码：404 MEMBER_NOT_FOUND / 403 MEMBER_USER_MISMATCH / 404 INSERT_FAILED
 - 测试：`ee/apps/den-api/test/team-autonomy/personal-team.test.ts`（T1-T7，GREEN 7/7）
 - 已知限制：slug 固定 `"personal"`，同 org 第二个用户创建会撞 `team_organization_slug` 唯一索引（与 P2 `personal-team-service.ts` 同模式，P2 测试 T11/T12 即因此失败；建议 REFACTOR 改为 `personal-<teamId>` 唯一 slug）
+
+### §7.1 auth session.create hook 接线（2026-08-04）
+- 文件：`ee/apps/den-api/src/auth.ts`（`databaseHooks.session.create.before`）
+- 接线位置：before hook 内 `reconcilePendingInvitationsForUser` 之后、`return { data: { ...session, activeOrganizationId } }` 之前
+- 调用时序：`normalizeDenTypeId("user", session.userId)` → `getInitialActiveOrganizationIdForUser(userId)` 得到 `activeOrganizationId` → 若存在则 `await ensurePersonalTeamForUser(userId, activeOrganizationId)`（新用户无 org 时 `activeOrganizationId` 为空 → 直接跳过，不调用）
+- 错误处理策略（before hook 不抛异常、不改变 session 返回结构）：
+  - 调用整体包 `try/catch`，异常记 `logger.error("personal team auto-create failed", { user_id, organization_id, error })`
+  - 返回 `{ ok: false }`（如 MEMBER_NOT_FOUND）→ `logger.warn("personal team auto-create skipped", { user_id, organization_id, code, message })`，不抛
+  - 成功不额外日志（幂等，重复登录是常态）
+- 循环依赖检查：`personal-team.ts` 仅依赖 `../db.js` / `@openwork-ee/den-db` / `@openwork-ee/utils/typeid`，不反向依赖 `auth.ts` → 无循环依赖，静态 import 安全
+- 验证：`tsc --noEmit` auth.ts 0 错误（src/team-autonomy/* 既有报错属其他并行任务）；运行时 `import('./src/team-autonomy/personal-team.js')` 加载正常（导出 ensurePersonalTeamForUser）；`test/member-connected-account-revocation-contract.test.ts` 5/5 pass（读 auth.ts 源码契约测试，不回归）
+- commit：`feat(team-autonomy): wire personal-team auto-create into auth session.create hook`

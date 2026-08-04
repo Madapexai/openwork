@@ -3,6 +3,7 @@ import { getInitialActiveOrganizationIdForUser } from "./active-organization.js"
 import { db } from "./db.js";
 import { env } from "./env.js";
 import { appLogger } from "./observability/logger.js";
+import { ensurePersonalTeamForUser } from "./team-autonomy/personal-team.js";
 import {
   deleteMcpOAuthGrantFamilyForSession,
   getMcpSessionLiveness,
@@ -582,6 +583,29 @@ export const auth = betterAuth({
             await reconcilePendingInvitationsForUser(userId);
           } catch (error) {
             logger.error("invitation reconcile failed", { user_id: userId, error });
+          }
+
+          // Team Autonomy: auto-create the user's personal team on first login.
+          // Never block session creation — a missing org/member is expected for
+          // brand-new users, so failures are logged and swallowed.
+          if (activeOrganizationId) {
+            try {
+              const result = await ensurePersonalTeamForUser(userId, activeOrganizationId);
+              if (!result.ok) {
+                logger.warn("personal team auto-create skipped", {
+                  user_id: userId,
+                  organization_id: activeOrganizationId,
+                  code: result.response.code,
+                  message: result.response.message,
+                });
+              }
+            } catch (error) {
+              logger.error("personal team auto-create failed", {
+                user_id: userId,
+                organization_id: activeOrganizationId,
+                error,
+              });
+            }
           }
 
           return {

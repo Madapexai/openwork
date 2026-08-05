@@ -24,6 +24,8 @@ import type {
 
 // Re-export AgentEvent for downstream consumers (relay.ts, team.ts, etc.)
 export type { AgentEvent } from "../agent-sidecar/types.js";
+// Re-export AgentSidecarAdapter for consumers that bridge agent-team types with sidecar adapters (e2e.test.ts)
+export type { AgentSidecarAdapter } from "../agent-sidecar/types.js";
 
 // ============================================================
 // Team 成员与配置

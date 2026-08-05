@@ -268,7 +268,7 @@ class NoneParser implements OutputParser {
 // JSONL → AgentEvent 映射
 // ============================================================
 
-function mapJsonlToEvent(obj: unknown, _agentId?: string): AgentEvent | null {
+export function mapJsonlToEvent(obj: unknown, _agentId?: string): AgentEvent | null {
   if (typeof obj !== "object" || obj === null) return null;
   const record = obj as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : typeof record.kind === "string" ? record.kind : "";

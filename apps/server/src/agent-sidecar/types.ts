@@ -175,6 +175,18 @@ export interface AgentSidecarConfig {
   outputParser?: "jsonl" | "ansi" | "regex" | "none";
   /** 集群 generic 专用：正则模式 */
   outputPattern?: string;
+  /**
+   * CLI 适配专用（openspec-cli-agent-adapter）：agent 的 headless / 结构化输出声明。
+   * 由 runtime 探测（detectCliCapabilities）交叉验证，冲突时 fail-fast。
+   */
+  cliProfile?: {
+    /** 是否支持 headless（一次性 print/exec）模式 */
+    headless?: boolean;
+    /** headless 参数模板（含输出格式），如 ["-p", "--output-format", "stream-json"] / ["exec", "--json"] */
+    headlessArgs?: string[];
+    /** 支持的结构化输出格式 */
+    outputFormats?: Array<"json" | "stream-json" | "ansi">;
+  };
   /** 显示名覆盖 */
   displayName?: string;
   /** 是否禁用 */

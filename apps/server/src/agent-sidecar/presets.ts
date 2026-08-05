@@ -95,6 +95,10 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "kimi",
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
+    cliProfile: {
+      // headless -p 未验证；走 L3 ACP（kimi acp），Zed agent_servers 证据（--acp）
+      headless: false,
+    },
     installHint: "curl -fsSL https://kimi.com/code/install.sh | bash",
   },
 
@@ -339,6 +343,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "claude",
     args: ["-p"],
     capabilities: { ...PTY_DEFAULT_CAPS, permissions: true },
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["-p", "--output-format", "stream-json"],
+      outputFormats: ["stream-json", "json"],
+    },
     installHint: "npm install -g @anthropic-ai/claude-code",
   },
 
@@ -351,6 +360,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "codex",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["exec", "--json"],
+      outputFormats: ["json"],
+    },
   },
 
   "cursor-agent": {
@@ -362,6 +376,10 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "cursor-agent",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    cliProfile: {
+      // headless -p 官方文档未稳定验证，暂按交互式兜底（L1 PTY）
+      headless: false,
+    },
   },
 
   gemini: {
@@ -373,6 +391,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "gemini",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["-p", "--output-format", "stream-json"],
+      outputFormats: ["stream-json", "json"],
+    },
   },
 
   copilot: {
@@ -417,6 +440,22 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "codebuff",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+  },
+
+  freebuff: {
+    agentId: "freebuff",
+    label: "Freebuff",
+    vendor: "freebuff",
+    homepage: "https://www.npmjs.com/package/freebuff",
+    protocol: "pty",
+    binary: "freebuff",
+    args: [],
+    capabilities: PTY_DEFAULT_CAPS,
+    cliProfile: {
+      // 免费 Claude Code 替代，交互式终端为主；headless 未验证 → fail-fast（L1 PTY 兜底）
+      headless: false,
+    },
+    installHint: "npm install -g freebuff",
   },
 
   continue: {
@@ -472,6 +511,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "qwen-code",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["-p"],
+      outputFormats: ["ansi"],
+    },
   },
 
   "rovo-dev": {

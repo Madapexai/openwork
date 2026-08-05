@@ -21,6 +21,7 @@ import type { AgentEvent, AgentSidecarAdapter } from "../agent-sidecar/types.js"
 import type { AcpSidecarAdapter } from "../agent-sidecar/adapters/acp.js";
 import type { PtySidecarAdapter } from "../agent-sidecar/adapters/pty.js";
 import type { GenericSidecarAdapter } from "../agent-sidecar/adapters/generic.js";
+import type { GenericCliSidecarAdapter } from "../agent-sidecar/cli-adapter/generic-cli.js";
 import { runAcpPrompt } from "../agent-sidecar/sessions.js";
 
 /** 单 agent 执行参数 */
@@ -48,7 +49,13 @@ export async function* runAgentPrompt(
   switch (adapter.protocol) {
     case "pty":
     case "generic": {
-      yield* runPtyPrompt(adapter as PtySidecarAdapter | GenericSidecarAdapter, prompt, timeoutMs);
+      // 新式 CLI 适配器（GenericCliSidecarAdapter）：走 exec/stream 语义（L2 headless / L1 pty）
+      const cliAdapter = adapter as PtySidecarAdapter | GenericSidecarAdapter | GenericCliSidecarAdapter;
+      if (typeof (cliAdapter as GenericCliSidecarAdapter).stream === "function") {
+        yield* (cliAdapter as GenericCliSidecarAdapter).stream(prompt, { cwd, timeoutMs });
+        return;
+      }
+      yield* runPtyPrompt(cliAdapter as PtySidecarAdapter | GenericSidecarAdapter, prompt, timeoutMs);
       return;
     }
     case "acp": {

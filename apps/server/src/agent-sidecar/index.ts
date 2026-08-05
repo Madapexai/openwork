@@ -107,6 +107,14 @@ export { PtySidecarAdapter } from "./adapters/pty.js";
 export { McpSidecarAdapter } from "./adapters/mcp.js";
 export { GenericSidecarAdapter } from "./adapters/generic.js";
 export { BaseSidecarAdapter } from "./adapters/base.js";
+export {
+  GenericCliSidecarAdapter,
+  detectCliCapabilities,
+  CliAgentUnsupportedError,
+  type CliCapabilities,
+  type CliAutomationMode,
+  type CliExecOptions,
+} from "./cli-adapter/generic-cli.js";
 
 // Re-export for convenience (for tests and external usage)
 export type { AgentSidecarAdapter as Adapter };

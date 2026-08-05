@@ -1,33 +1,88 @@
-# MindApex — OpenWork 增强版：多 Agent 团队自动化平台
+# OpenWork — 多 Agent 团队自动化平台
 
-> **Fork 声明**：MindApex 是基于 [different-ai/openwork](https://github.com/different-ai/openwork) 的开源增强分支。我们在 OpenWork 的基础上做了持续升级：接入 60+ 主流 CLI Code Agent、构建 team-autonomy 团队自治层、自建 SSO 控制平面，把 OpenWork 从「技能/工作流共享桌面应用」演进为「多 Agent 团队自动化平台」。
+> **Fork 声明 / Fork Notice**
+> 本仓库是 [different-ai/openwork](https://github.com/different-ai/openwork) 的开源增强分支（enhanced fork）。我们保留了 OpenWork 的全部能力，并在此基础上接入 60+ 主流 CLI Code Agent、构建 team-autonomy 团队自治层、自建 SSO 控制平面。**本文档支持中英双语 / This document is bilingual (English + 简体中文).**
 
-OpenWork 是一个免费开源的桌面应用，用于共享 AI 工作流（skills / MCP / 连接的服务），是 Claude Cowork 与 Codex 的开源替代品。MindApex 保留了它的全部能力，并在此基础上增加了**团队自治（team-autonomy）**与**多 CLI Agent 接入**两层能力。
+OpenWork is a free, open-source desktop app made for sharing AI workflows. It is an open-source alternative to Claude Cowork and Codex for macOS, Windows, and Linux. Add one OpenWork MCP to Codex, Claude Code, Cursor, or another compatible agent and reuse the same skills, MCPs, and connected services across your tools, teammates, and machines.
 
-## 我们是什么
+OpenWork 是一个免费开源的桌面应用，用于共享 AI 工作流（skills / MCP / 连接的服务），是 Claude Cowork 与 Codex 的开源替代品。**本分支**在继承其全部能力的基础上，增加了**多 Agent 接入**与**团队自治（team-autonomy）**两层能力，把 OpenWork 从「技能/工作流共享应用」演进为「多 Agent 团队自动化平台」。
 
-MindApex 是面向「AI Agent 团队」的自动化平台，回答三个问题：
+---
 
-1. **你的机器上有哪些 Agent 引擎？** —— 自动探测 PATH 上的全部 CLI Code Agent（Claude Code / Codex / Gemini CLI / Qwen Code / Kimi / Freebuff / Cursor / OpenCode 等 60+），上报能力矩阵（headless / 结构化输出 / ACP / PTY）。
-2. **多个 Agent 如何并行协作不互相干扰？** —— 每个任务独立分支 + 独立目录（git worktree），完成后自动回收；Chat 群里 `@agentId` 即可驱动 agent 干活，agent 回复里 `@otherAgent` 自动接力（A 实现 → B 审查）。
-3. **团队如何自治？** —— 任务依赖图、审批、预算、自动化的完整闭环，全部跑在**你自己的 SSO 控制平面**（better-auth + self-hosted den-api）上，不依赖 OpenWork Cloud。
+## 我们是什么 / What We Are
 
-## 原理
+英文版：**A multi-agent team automation platform** — it answers three questions:
 
-### 架构总览
+1. **What agent engines exist on this machine?** — auto-detect every CLI Code Agent on PATH (Claude Code / Codex / Gemini CLI / Qwen Code / Kimi / Freebuff / Cursor / OpenCode, 60+ total) and report a capability matrix (headless / structured output / ACP / PTY).
+2. **How do multiple agents work in parallel without interfering?** — each task runs in its own git worktree (independent branch + directory), reclaimed automatically when done; in Chat, `@agentId` drives an agent and `@otherAgent` in a reply hands off automatically (A implements → B reviews).
+3. **How does the team stay autonomous?** — task dependency graph, approvals, budgets, and automation run as a closed loop on **your own SSO control plane** (better-auth + self-hosted den-api), no OpenWork Cloud dependency.
+
+中文版：**多 Agent 团队自动化平台**，回答三个问题：
+
+1. **这台机器上有哪些 Agent 引擎？** —— 自动探测 PATH 上的全部 CLI Code Agent（Claude Code / Codex / Gemini CLI / Qwen Code / Kimi / Freebuff / Cursor / OpenCode 等 60+），上报能力矩阵（headless / 结构化输出 / ACP / PTY）。
+2. **多个 Agent 如何并行协作互不干扰？** —— 每个任务独立分支 + 独立目录（git worktree），完成后自动回收；群里 `@agentId` 驱动 agent，回复中 `@otherAgent` 自动接力（A 实现 → B 审查）。
+3. **团队如何自治？** —— 任务依赖图、审批、预算、自动化的完整闭环，跑在**自建 SSO 控制平面**（better-auth + self-hosted den-api）上，不依赖 OpenWork Cloud。
+
+---
+
+## 与上游的差异（Differences from Upstream）和解决的问题（Problems Solved）
+
+### 差异对照表
+
+| 维度 Dimension | 上游 OpenWork (Upstream) | 本分支 (This Fork) |
+|---|---|---|
+| Agent 引擎 Agent engines | 仅 opencode sidecar | **60+ CLI Code Agents**（Claude Code / Codex / Gemini / Qwen / Kimi / Freebuff / Cursor…） |
+| CLI Agent 驱动 Driving | 交互式 PTY 盲写（interactive PTY, blind stdin） | **L2 headless 输出解析**（`claude -p` / `codex exec` / `gemini -p`）+ 能力探测 + **fail-fast** |
+| 任务隔离 Task isolation | cwd 切换（single cwd, no isolation） | **git worktree 生命周期**：独立分支 + 独立目录 + 闲置自动回收 |
+| Agent 调用入口 Entry point | UI / API 手动 | **Chat 桥接**：群聊 `@mention` 驱动 + 多 Agent 接力（maxHandoffs=3 防死循环） |
+| Runtime 能力上报 | 无（none） | **RuntimeRegistry**：机器上可用 Agent 引擎自动探测、TTL 缓存、深度能力探测 |
+| 控制平面 Control plane | OpenWork Cloud（依赖云） | **自建 SSO**：better-auth + self-hosted den-api |
+| 团队自治 Team autonomy | — | TaskService / AutomationService / SkillValidationService / Permission+Inbox 完整闭环 |
+
+### 解决的问题（Problems We Solved）
+
+1. **只能驱动 opencode，其他主流 CLI Agent 无法接入**
+   上游仅内置 opencode sidecar；其他 Code Agent（Claude Code / Codex / Gemini / Kimi / Freebuff…）要么不支持、要么需要手工拼 PTY。我们实现了 `GenericCliSidecarAdapter`，按真实能力分层驱动（headless 优先、PTY 兜底、ACP 结构化），60+ presets 一条声明即可接入。
+   *Upstream could only drive opencode; we added a generic CLI adapter so 60+ agents work with one preset line.*
+
+2. **Agent 调用失败被静默吞掉，出现「假成功」**
+   上游对不支持的 agent 只是盲写 stdin，进程起来了却永远收不到结果。我们引入 **fail-fast 原则**：声明与实测冲突、二进制缺失一律显式抛错（`CliAgentUnsupportedError`），绝不假成功。
+   *Upstream silently swallowed failures (fake success); we fail fast with explicit errors.*
+
+3. **多 Agent 并行互相污染工作区**
+   上游只在同一个 cwd 切换目录，A 的改动会污染 B。我们引入 **git worktree 生命周期服务**：每个任务独立分支 + 独立目录，任务完成/失败后自动回收，闲置 6h 自动清理。
+   *Upstream shared one cwd; we isolate each task in its own git worktree with auto-reclamation.*
+
+4. **Agent 只能通过 UI 手动点，无法群聊驱动**
+   我们实现 **Chat 桥接层**：任何聊天通道里 `@agentId` 驱动干活，回复里 `@otherAgent` 自动接力（A 实现 → B 审查），深度受限防死循环。
+   *Upstream had no chat entry; we bridge agents to chat channels with multi-agent relay.*
+
+5. **不知道机器上装了哪些 Agent**
+   我们实现 **RuntimeRegistry**：daemon 启动时自动探测 PATH 上的可用 CLI Agents 并上报能力矩阵（TTL 缓存、逐条容错），UI / 控制平面随时可查。
+   *Upstream never reported what agents exist; we auto-detect and expose a capability matrix.*
+
+6. **依赖 OpenWork Cloud，数据与认证上云**
+   我们实现 **自建 SSO**（better-auth + self-hosted den-api），桌面客户端直接指向自己的控制平面，团队数据不出内网。
+   *Upstream depends on OpenWork Cloud; we self-host SSO and the control plane.*
+
+---
+
+## 原理 / How It Works
+
+### 架构总览 (Architecture)
 
 ```mermaid
 flowchart TB
-    subgraph Client["桌面客户端（Electron）"]
+    subgraph Client["桌面客户端 Electron"]
         UI[OpenWork UI]
     end
 
-    subgraph Control["控制平面（自建 den-api + better-auth SSO）"]
+    subgraph Control["控制平面 Control Plane (den-api + better-auth SSO)"]
         SSO[SSO / 会话]
         TEAM[TeamAgentService<br/>任务依赖图 / 审批 / 预算 / 自动化]
     end
 
-    subgraph Runtime["本地 Runtime（OpenWork server）"]
+    subgraph Runtime["本地 Runtime (OpenWork server)"]
         REG[RuntimeRegistry<br/>能力上报 · TTL 缓存]
         WT[WorktreeService<br/>任务隔离 · 自动回收]
         RELAY[ChatRelayService<br/>@mention 路由 · 多 Agent 接力]
@@ -57,7 +112,7 @@ flowchart TB
     SIDECAR --> CC & CX & GM & QW & KM & FB & OTHER
 ```
 
-### 多 Agent 接力原理（Chat Bridge）
+### 多 Agent 接力 (Multi-Agent Relay)
 
 ```mermaid
 sequenceDiagram
@@ -75,42 +130,23 @@ sequenceDiagram
     Note over Relay: 接力深度受限 (maxHandoffs=3)，防死循环
 ```
 
-### 与上游 OpenWork 的差异
+---
 
-| 维度 | OpenWork（上游） | MindApex（我们的增强） |
-|---|---|---|
-| Agent 引擎 | 仅 opencode sidecar | **60+ CLI Code Agents**（Claude Code / Codex / Gemini / Qwen / Kimi / Freebuff / Cursor…） |
-| CLI Agent 驱动 | 交互式 PTY 盲写 | **L2 headless 输出解析**（`claude -p` / `codex exec` / `gemini -p`）+ 能力探测 + fail-fast |
-| 任务隔离 | cwd 切换 | **git worktree 生命周期**（独立分支 + 独立目录 + 闲置自动回收） |
-| Agent 调用入口 | UI / API | **Chat 桥接**（群聊 @mention 驱动 + 多 Agent 接力） |
-| Runtime 能力 | 无上报 | **RuntimeRegistry**（机器上可用 Agent 引擎自动探测与上报） |
-| 控制平面 | OpenWork Cloud | **自建 SSO**（better-auth + self-hosted den-api），不依赖云 |
-| 团队自治 | — | TaskService / AutomationService / SkillValidationService / Permission+Inbox 完整闭环 |
+## Install with your AI agent（继承自 OpenWork）
 
-## 核心特性
-
-- **60+ CLI Agent 统一接入**：headless 优先、PTY 兜底、ACP 结构化，全部走统一 `AgentSidecarAdapter` 接口
-- **fail-fast 原则**：不支持的 Agent 显式失败，绝不假成功
-- **多 Agent 并行**：worktree 物理隔离，互不干扰；闲置自动回收
-- **群聊驱动**：把 AI Agent 桥接到任意聊天通道，`@agentId` 驱动干活，`@otherAgent` 自动接力
-- **团队自治闭环**：任务依赖图、Plan 审批、预算、自动化重试/降级/告警
-- **自建 SSO**：better-auth，桌面客户端直接指向自建 den-api
-
-## Install with your AI agent
-
-继承自 OpenWork：把下面这段粘贴进 Claude Code / Cursor / Codex / 任何能执行命令的 Agent。
+Copy this prompt and paste it into Claude Code, Cursor, Codex, ChatGPT, or any agent that can run commands on your computer.
 
 ```text
 Install OpenWork on my computer, set up my first workspace, and open it ready to use. Follow the steps in https://openworklabs.com/start.md?v=hero
 ```
 
-1. 安装 OpenWork
-2. 创建你的 workspace
-3. 打开即可运行
+1. Installs OpenWork
+2. Creates your workspace
+3. Opens it ready to run
 
-## Use OpenWork from any agent
+## Use OpenWork from any agent（继承自 OpenWork）
 
-继承自 OpenWork：OpenWork MCP 把 skills / plugins / MCP 连接 / Google Workspace / Microsoft 365 能力带入任何兼容 Agent。它暴露两个工具：`search_capabilities` 查找可用能力，`execute_capability` 执行能力。
+The OpenWork MCP brings your assigned skills, plugins, MCP connections, Google Workspace, and Microsoft 365 capabilities into any compatible agent. It exposes two tools: `search_capabilities` finds what you can use, and `execute_capability` runs it.
 
 ### Codex
 
@@ -141,9 +177,9 @@ Add this to `opencode.json`:
 }
 ```
 
-## OpenWork Den（控制平面）
+## OpenWork Den（控制平面 / Control Plane）
 
-MindApex 将其扩展为**自建控制平面**（self-hosted den-api + better-auth SSO）：
+继承 OpenWork 的 Den 能力，本分支将其扩展为**自建控制平面**（self-hosted den-api + better-auth SSO）：
 
 - Provision inference at scale 并控制每个成员/团队可用的模型提供商
 - 邀请成员、创建团队、一处管理访问权限
@@ -151,7 +187,7 @@ MindApex 将其扩展为**自建控制平面**（self-hosted den-api + better-au
 - 通过 marketplace 发布 skills / plugins，分配给组织 / 团队 / 个人
 - 导入 Anthropic 兼容插件，通过 OpenWork MCP 提供其 skills 与远程 MCP
 
-## Local development
+## Local development（本地开发）
 
 沿用 OpenWork 的开发方式：单 checkout 直接 `pnpm dev`；多 worktree 并行开发用 `pnpm dev:worktree`。
 
@@ -164,9 +200,9 @@ pnpm dev:worktree        # 多 git worktree 并行（OPENWORK_DEV_PROFILE=auto�
 
 ## Documentation
 
-- [OpenWork docs](https://openworklabs.com/docs)（继承）
-- OpenSpecs（团队自治设计规范）：`prds/team-autonomy/openspecs/`（openspec-cli-agent-adapter / openspec-runtime-reporting / openspec-worktree-service / openspec-chat-bridge 等）
+- [OpenWork docs](https://openworklabs.com/docs)（继承 Upstream）
+- OpenSpecs（本分支团队自治设计规范）：`prds/team-autonomy/openspecs/`（openspec-cli-agent-adapter / openspec-runtime-reporting / openspec-worktree-service / openspec-chat-bridge 等）
 
 ## License
 
-本项目继承 OpenWork 的开源许可。上游：https://github.com/different-ai/openwork
+本项目继承 OpenWork 的开源许可。上游 / Upstream: https://github.com/different-ai/openwork

@@ -65,6 +65,13 @@ import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
+import { registerAgentRuntimeRoutes } from "./routes/agent-runtimes.js";
+import { registerWorktreeRoutes } from "./routes/worktrees.js";
+import { registerChatRoutes } from "./routes/chat.js";
+import { RuntimeRegistry } from "./runtime-registry.js";
+import { WorktreeService } from "./worktree/worktree-service.js";
+import { ChatRelayService } from "./chat/chat-relay.js";
+import { InMemoryChatChannel } from "./chat/channels/in-memory.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
 import {
   markOpenworkCloudMcpStale,
@@ -1569,6 +1576,20 @@ function createRoutes(
     reloadOpencodeEngine: (routeConfig, workspace) =>
       reloadOpencodeEngine(routeConfig, workspace, engineMcpServerState),
   });
+
+  // ============================================================
+  // team-autonomy 扩展路由（openspec-runtime-reporting / worktree / chat-bridge）
+  // ============================================================
+  const runtimeRegistry = new RuntimeRegistry();
+  const worktreeService = new WorktreeService();
+  const chatChannels: Record<string, import("./chat/types.js").ChatChannelAdapter> = {
+    "in-memory": new InMemoryChatChannel(),
+  };
+  const chatRelay = new ChatRelayService({ cwd: config.workspaces[0]?.path || process.cwd() });
+
+  registerAgentRuntimeRoutes({ routes, registry: runtimeRegistry, jsonResponse });
+  registerWorktreeRoutes({ routes, service: worktreeService, jsonResponse, readJsonBody });
+  registerChatRoutes({ routes, channels: chatChannels, relay: chatRelay, jsonResponse, readJsonBody });
 
   registerSessionRoutes({
     routes,

@@ -18,7 +18,7 @@
     "build": "tsup --config tsup.config.react.ts"
   },
   "dependencies": {
-    "@paper-design/shaders": "0.0.72",
+    "@paper-design/shaders": "0.0.78",
     "@paper-design/shaders-react": "0.0.72"
   },
   "peerDependencies": {

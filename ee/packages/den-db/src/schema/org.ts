@@ -47,12 +47,28 @@ export const OrganizationTable = mysqlTable(
     allowedEmailDomains: json("allowed_email_domains").$type<string[] | null>(),
     desktopAppRestrictions: json("desktop_app_restrictions").$type<DesktopAppRestrictions>().notNull().default(sql`(json_object())`),
     metadata: json("metadata").$type<Record<string, unknown> | null>(),
+    siteId: denTypeIdColumn("site", "id"),
     createdAt: timestamp("created_at", { fsp: 3 }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { fsp: 3 })
       .notNull()
       .default(sql`CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)`),
   },
   (table) => [uniqueIndex("organization_slug").on(table.slug), index("organization_created_at_id").on(table.createdAt, table.id)],
+)
+
+export const SiteTable = mysqlTable(
+  "site",
+  {
+    id: denTypeIdColumn("site", "id").notNull().primaryKey(),
+    organizationId: denTypeIdColumn("organization", "organization_id").notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    domain: varchar("domain", { length: 255 }),
+    createdAt: timestamp("created_at", { fsp: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { fsp: 3 })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)`),
+  },
+  (table) => [index("site_organization_id").on(table.organizationId)],
 )
 
 export const OrganizationBrandAssetTable = mysqlTable(
@@ -226,6 +242,7 @@ export const organizationRoleRelations = relations(OrganizationRoleTable, ({ one
 }))
 
 export const organization = OrganizationTable
+export const site = SiteTable
 export const member = MemberTable
 export const invitation = InvitationTable
 export const workspaceBootstrap = WorkspaceBootstrapTable

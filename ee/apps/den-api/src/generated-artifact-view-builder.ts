@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { createRequire } from "node:module"
 import { Worker } from "node:worker_threads"
-import { build, version as esbuildVersion, type Message, type Plugin } from "esbuild"
+import { build, transform, type Message, type Plugin } from "esbuild"
 import React from "react"
 import type {
   GeneratedArtifactViewBuildDiagnostic,
@@ -11,14 +11,17 @@ import type {
 const MAX_SOURCE_BYTES = 200_000
 const MAX_CSS_BYTES = 100_000
 // Keep provider output within the desktop MCP Apps host's resources/read limit.
-const MAX_HTML_BYTES = 512 * 1024
+const MAX_HTML_BYTES = 768 * 1024
 const BUILD_TIMEOUT_MS = 2_000
 const require = createRequire(import.meta.url)
+// The browser-ready entry retains the stable MCP Apps client while avoiding
+// rebundling the SDK's validation dependencies into every immutable view.
+const extAppsEntry = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps")
 const reactPackageRoot = require.resolve("react/package.json").replace(/\/package\.json$/u, "")
 const reactDomPackageRoot = require.resolve("react-dom/package.json").replace(/\/package\.json$/u, "")
 
 export const GENERATED_ARTIFACT_VIEW_COMPILER = "openwork-react-view"
-export const GENERATED_ARTIFACT_VIEW_COMPILER_VERSION = "2"
+export const GENERATED_ARTIFACT_VIEW_COMPILER_VERSION = "3"
 export const GENERATED_ARTIFACT_VIEW_CSP: GeneratedArtifactViewCsp = {
   connectDomains: [],
   resourceDomains: [],
@@ -70,7 +73,17 @@ function diagnosticsFrom(error: unknown): GeneratedArtifactViewBuildDiagnostic[]
   return [diagnostic(error instanceof Error ? error.message : "React view build failed.")]
 }
 
-function sourcePolicyDiagnostic(reactSource: string, cssSource: string): GeneratedArtifactViewBuildDiagnostic | null {
+const HOST_GLOBAL_NAMES = [
+  "process", "globalThis", "window", "document", "self", "parent", "top", "opener", "frames",
+  "location", "navigator", "history", "postMessage", "localStorage", "sessionStorage", "indexedDB",
+] as const
+
+const HOST_GLOBAL_DEFINES = Object.fromEntries(HOST_GLOBAL_NAMES.map((name, index) => [
+  name,
+  `__openwork_forbidden_host_global_${index}__`,
+]))
+
+async function sourcePolicyDiagnostic(reactSource: string, cssSource: string): Promise<GeneratedArtifactViewBuildDiagnostic | null> {
   const sourceBytes = Buffer.byteLength(reactSource)
   const cssBytes = Buffer.byteLength(cssSource)
   if (sourceBytes > MAX_SOURCE_BYTES) return diagnostic(`React source exceeds ${MAX_SOURCE_BYTES} bytes.`)
@@ -79,7 +92,6 @@ function sourcePolicyDiagnostic(reactSource: string, cssSource: string): Generat
   const forbidden = [
     { pattern: /\b(?:import|require)\s*(?:\(|["'{])/u, label: "module imports" },
     { pattern: /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|Worker)\b/u, label: "network APIs" },
-    { pattern: /\b(?:process|globalThis|window|document|self|parent|top|opener|frames|location|navigator|history|postMessage|localStorage|sessionStorage|indexedDB)\b/u, label: "host globals" },
     { pattern: /\b(?:eval|Function|setTimeout|setInterval)\s*\(/u, label: "dynamic code or timers" },
     { pattern: /dangerouslySetInnerHTML/u, label: "dangerous HTML injection" },
     { pattern: /<[A-Za-z][^<>]*\b(?:href|src|srcSet|action|formAction|poster|ping|cite|xlinkHref|data)\s*=/u, label: "URL-bearing attributes" },
@@ -88,6 +100,28 @@ function sourcePolicyDiagnostic(reactSource: string, cssSource: string): Generat
   ]
   const blocked = forbidden.find(({ pattern }) => pattern.test(reactSource))
   if (blocked) return diagnostic(`Generated Artifact views cannot use ${blocked.label}. Use props.data and React rendering only.`)
+
+  // esbuild's define substitution is scope-aware: it replaces only unbound
+  // global references and leaves local bindings such as `const top = ...`
+  // untouched. Inspecting the parsed output avoids both the old local-name
+  // false positive and whole-file shadowing bypasses across nested scopes.
+  let scopeAnalyzedSource: string
+  try {
+    scopeAnalyzedSource = (await transform(reactSource, {
+      loader: "tsx",
+      format: "esm",
+      target: "es2022",
+      legalComments: "none",
+      define: HOST_GLOBAL_DEFINES,
+    })).code
+  } catch (error) {
+    return diagnosticsFrom(error)[0] ?? diagnostic("React view build failed.")
+  }
+  const hostGlobal = HOST_GLOBAL_NAMES.find((_, index) =>
+    scopeAnalyzedSource.includes(`__openwork_forbidden_host_global_${index}__`))
+  if (hostGlobal) {
+    return diagnostic(`Generated Artifact views cannot use the browser host global "${hostGlobal}". Use component props and React rendering only.`)
+  }
   if (/^\s*@import\b/mu.test(cssSource) || /url\s*\(/u.test(cssSource)) {
     return diagnostic("Generated Artifact CSS cannot import or reference external resources.")
   }
@@ -119,31 +153,6 @@ function createSafeArtifactReact(baseReact) {
 }
 `
 
-function schemaFixture(schema: unknown, depth = 0): unknown {
-  if (depth > 5 || typeof schema !== "object" || schema === null || Array.isArray(schema)) return null
-  const value = schema as Record<string, unknown>
-  if (value.const !== undefined) return value.const
-  if (Array.isArray(value.enum) && value.enum.length > 0) return value.enum[0]
-  const type = value.type
-  if (type === "object" || (type === undefined && typeof value.properties === "object")) {
-    const properties = typeof value.properties === "object" && value.properties !== null && !Array.isArray(value.properties)
-      ? value.properties as Record<string, unknown>
-      : {}
-    return Object.fromEntries(Object.entries(properties).slice(0, 30).map(([key, property]) => [key, schemaFixture(property, depth + 1)]))
-  }
-  if (type === "array") return value.items === undefined ? [] : [schemaFixture(value.items, depth + 1)]
-  if (type === "string") return typeof value.format === "string" && value.format.includes("date") ? "2026-01-01" : "Example"
-  if (type === "number" || type === "integer") return 0
-  if (type === "boolean") return false
-  if (Array.isArray(value.oneOf) && value.oneOf[0] !== undefined) return schemaFixture(value.oneOf[0], depth + 1)
-  if (Array.isArray(value.anyOf) && value.anyOf[0] !== undefined) return schemaFixture(value.anyOf[0], depth + 1)
-  return null
-}
-
-function safeJson(value: unknown): string {
-  return JSON.stringify(value).replace(/</gu, "\\u003c").replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029")
-}
-
 function generatedArtifactPlugin(reactSource: string): Plugin {
   return {
     name: "generated-artifact-view",
@@ -164,66 +173,77 @@ function generatedArtifactPlugin(reactSource: string): Plugin {
   }
 }
 
-async function buildClientBundle(reactSource: string, previewData: unknown, previewArtifact: Record<string, unknown>): Promise<string> {
+const GENERATED_ARTIFACT_RUNTIME_REPORTER = `
+(() => {
+  const safeMessage = (value) => {
+    if (value instanceof Error) return value.message.slice(0, 1000);
+    if (typeof value === "string") return value.slice(0, 1000);
+    return "The generated Artifact application failed at runtime.";
+  };
+  const report = (stage, value) => {
+    window.parent.postMessage({
+      method: "ui/notifications/sandbox-diagnostic",
+      params: {
+        code: "MCP_APP_DOCUMENT_RUNTIME_ERROR",
+        message: stage + ": " + safeMessage(value),
+      },
+    }, "*");
+  };
+  window.__openworkReportArtifactRuntimeError = report;
+  window.addEventListener("error", (event) => report("document-error", event.error || event.message));
+  window.addEventListener("unhandledrejection", (event) => report("unhandled-rejection", event.reason));
+})();
+`.trim().replace(/<\/script/giu, "<\\/script")
+
+async function buildClientBundle(reactSource: string): Promise<string> {
   const entry = `
     import React from "react";
     import { createRoot } from "react-dom/client";
+    import { App, PostMessageTransport } from "@modelcontextprotocol/ext-apps";
     const ArtifactView = React.lazy(() => import("artifact:view"));
     const mount = document.getElementById("openwork-artifact-view-root");
-    let payload = { data: ${safeJson(previewData)}, artifact: ${safeJson(previewArtifact)} };
-    const post = (message) => window.parent.postMessage(message, "*");
+    const reportRuntimeError = (stage, error) => {
+      const report = window.__openworkReportArtifactRuntimeError;
+      if (typeof report === "function") report(stage, error);
+    };
     const renderFailure = () => React.createElement("p", { role: "alert", style: { margin: "16px", fontFamily: "system-ui, sans-serif" } }, "This Artifact view could not render. The normal tool result is still available.");
     class ArtifactViewErrorBoundary extends React.Component {
       constructor(props) { super(props); this.state = { failed: false }; }
       static getDerivedStateFromError() { return { failed: true }; }
+      componentDidCatch(error) { reportRuntimeError("react-render", error); }
       render() { return this.state.failed ? renderFailure() : this.props.children; }
     }
     let root = null;
     let renderRevision = 0;
-    let resizeObserver = null;
-    let sizeFrame;
-    let initialized = false;
-    const reportSize = () => {
-      if (!initialized || sizeFrame !== undefined) return;
-      sizeFrame = requestAnimationFrame(() => {
-        sizeFrame = undefined;
-        const documentElement = document.documentElement;
-        const previousHeight = documentElement.style.height;
-        documentElement.style.height = "max-content";
-        const height = Math.ceil(documentElement.getBoundingClientRect().height);
-        documentElement.style.height = previousHeight;
-        post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { width: Math.ceil(window.innerWidth), height } });
-      });
-    };
-    const startAutoResize = () => {
-      initialized = true;
-      if (resizeObserver) return;
-      if (typeof ResizeObserver === "function") {
-        resizeObserver = new ResizeObserver(reportSize);
-        resizeObserver.observe(document.documentElement);
-        resizeObserver.observe(document.body);
-      }
-      reportSize();
-    };
     const apply = (next) => {
-      payload = next;
-      if (!root) { mount.textContent = "This Artifact view could not render. The normal tool result is still available."; return; }
-      renderRevision += 1;
-      root.render(React.createElement(ArtifactViewErrorBoundary, { key: renderRevision }, React.createElement(React.Suspense, { fallback: null }, React.createElement(ArtifactView, next))));
-      reportSize();
+      try {
+        if (!mount) throw new Error("The generated Artifact mount element is missing.");
+        root ||= createRoot(mount);
+        renderRevision += 1;
+        root.render(React.createElement(ArtifactViewErrorBoundary, { key: renderRevision }, React.createElement(React.Suspense, { fallback: null }, React.createElement(ArtifactView, next))));
+      } catch (error) {
+        reportRuntimeError("react-mount", error);
+        if (mount) mount.textContent = "This Artifact view could not render. The normal tool result is still available.";
+      }
     };
-    window.addEventListener("message", (event) => {
-      if (event.source !== window.parent || !event.data || event.data.jsonrpc !== "2.0") return;
-      const message = event.data;
-      if (message.id === "openwork-generated-artifact:init" && message.result) { post({ jsonrpc: "2.0", method: "ui/notifications/initialized" }); startAutoResize(); return; }
-      if (message.method === "ui/notifications/tool-result" && message.params && !message.params.isError && message.params.structuredContent) apply(message.params.structuredContent);
-      if (message.method === "ui/resource-teardown" && message.id !== undefined) { initialized = false; resizeObserver?.disconnect(); if (sizeFrame !== undefined) cancelAnimationFrame(sizeFrame); post({ jsonrpc: "2.0", id: message.id, result: {} }); }
+    const app = new App(
+      { name: "OpenWork Generated Artifact", version: "1.0.0" },
+      {},
+      { autoResize: true, strict: true },
+    );
+    app.ontoolresult = (result) => {
+      if (result.isError || !result.structuredContent) return;
+      apply(result.structuredContent);
+    };
+    app.onteardown = async () => {
+      root?.unmount();
+      root = null;
+      return {};
+    };
+    void app.connect(new PostMessageTransport(window.parent, window.parent)).catch((error) => {
+      reportRuntimeError("mcp-app-initialize", error);
+      if (mount) mount.textContent = "This Artifact view could not initialize. The normal tool result is still available.";
     });
-    post({ jsonrpc: "2.0", id: "openwork-generated-artifact:init", method: "ui/initialize", params: { appInfo: { name: "OpenWork Generated Artifact", version: "1.0.0" }, appCapabilities: {}, protocolVersion: "2026-01-26" } });
-    try {
-      root = createRoot(mount);
-      apply(payload);
-    } catch { mount.textContent = "This Artifact view could not render. The normal tool result is still available."; }
   `
   const result = await build({
     stdin: { contents: entry, loader: "tsx", resolveDir: process.cwd(), sourcefile: "generated-artifact-entry.tsx" },
@@ -236,6 +256,7 @@ async function buildClientBundle(reactSource: string, previewData: unknown, prev
     legalComments: "none",
     define: { "process.env.NODE_ENV": '"production"' },
     alias: {
+      "@modelcontextprotocol/ext-apps": extAppsEntry,
       react: reactPackageRoot,
       "react-dom": reactDomPackageRoot,
     },
@@ -265,23 +286,18 @@ export async function buildGeneratedArtifactViewInWorker(input: GeneratedArtifac
     reactVersion: React.version,
     csp: GENERATED_ARTIFACT_VIEW_CSP,
   }
-  const policyFailure = sourcePolicyDiagnostic(reactSource, cssSource)
+  const policyFailure = await sourcePolicyDiagnostic(reactSource, cssSource)
   if (policyFailure) return { ok: false, ...shared, diagnostics: [policyFailure] }
 
   try {
-    const previewData = schemaFixture(input.outputSchema)
-    const previewArtifact = {
-      title: input.title,
-      description: input.description,
-      freshness: { state: "never_run" },
-      source: "manual",
-    }
     // esbuild parses and bundles generated source, but OpenWork never executes
     // it in the Den process. The authored React runs only after the immutable
-    // resource is loaded by an MCP host in its sandboxed iframe.
-    const javascript = await buildClientBundle(reactSource, previewData, previewArtifact)
+    // resource completes MCP Apps initialization and receives render-time
+    // structuredContent inside the host's sandboxed iframe.
+    const javascript = await buildClientBundle(reactSource)
+    const runtimeReporterDigest = createHash("sha256").update(GENERATED_ARTIFACT_RUNTIME_REPORTER).digest("base64")
     const scriptDigest = createHash("sha256").update(javascript).digest("base64")
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${scriptDigest}'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'"><title>${input.title.replace(/[<&>]/gu, "")}</title><style>${cssSource}</style></head><body><div id="openwork-artifact-view-root"></div><script>${javascript}</script></body></html>`
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${runtimeReporterDigest}' 'sha256-${scriptDigest}'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'"><title>${input.title.replace(/[<&>]/gu, "")}</title><style>${cssSource}</style></head><body><div id="openwork-artifact-view-root"></div><script>${GENERATED_ARTIFACT_RUNTIME_REPORTER}</script><script>${javascript}</script></body></html>`
     const htmlBytes = Buffer.byteLength(html)
     if (htmlBytes > MAX_HTML_BYTES) throw new Error(`Compiled MCP App exceeds ${MAX_HTML_BYTES} bytes.`)
     return {

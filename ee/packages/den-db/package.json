@@ -9,66 +9,85 @@
     ".": {
       "types": "./src/index.ts",
       "development": "./src/index.ts",
+      "import": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./schema": {
       "types": "./src/schema.ts",
       "development": "./src/schema.ts",
+      "import": "./src/schema.ts",
       "default": "./dist/schema.js"
     },
     "./schema/auth": {
       "types": "./src/schema/auth.ts",
       "development": "./src/schema/auth.ts",
+      "import": "./src/schema/auth.ts",
       "default": "./dist/schema/auth.js"
     },
     "./schema/desktop-policies": {
       "types": "./src/schema/desktop-policies.ts",
       "development": "./src/schema/desktop-policies.ts",
+      "import": "./src/schema/desktop-policies.ts",
       "default": "./dist/schema/desktop-policies.js"
     },
     "./schema/inference": {
       "types": "./src/schema/inference.ts",
       "development": "./src/schema/inference.ts",
+      "import": "./src/schema/inference.ts",
       "default": "./dist/schema/inference.js"
     },
     "./schema/org": {
       "types": "./src/schema/org.ts",
       "development": "./src/schema/org.ts",
+      "import": "./src/schema/org.ts",
       "default": "./dist/schema/org.js"
     },
     "./schema/teams": {
       "types": "./src/schema/teams.ts",
       "development": "./src/schema/teams.ts",
+      "import": "./src/schema/teams.ts",
       "default": "./dist/schema/teams.js"
     },
     "./schema/telegram": {
       "types": "./src/schema/telegram.ts",
       "development": "./src/schema/telegram.ts",
+      "import": "./src/schema/telegram.ts",
       "default": "./dist/schema/telegram.js"
     },
     "./schema/subscriptions": {
       "types": "./src/schema/subscriptions.ts",
       "development": "./src/schema/subscriptions.ts",
+      "import": "./src/schema/subscriptions.ts",
       "default": "./dist/schema/subscriptions.js"
     },
     "./schema/workers": {
       "types": "./src/schema/workers.ts",
       "development": "./src/schema/workers.ts",
+      "import": "./src/schema/workers.ts",
       "default": "./dist/schema/workers.js"
     },
     "./schema/system": {
       "types": "./src/schema/system.ts",
       "development": "./src/schema/system.ts",
+      "import": "./src/schema/system.ts",
       "default": "./dist/schema/system.js"
     },
     "./schema/telemetry": {
       "types": "./src/schema/telemetry.ts",
       "development": "./src/schema/telemetry.ts",
+      "import": "./src/schema/telemetry.ts",
       "default": "./dist/schema/telemetry.js"
+    },
+    "./schema/team-autonomy": {
+      "types": "./src/schema/team-autonomy.ts",
+      "development": "./src/schema/team-autonomy.ts",
+      "import": "./src/schema/team-autonomy.ts",
+      "default": "./dist/schema/team-autonomy.js"
     },
     "./drizzle": {
       "types": "./src/drizzle.ts",
       "development": "./src/drizzle.ts",
+      "import": "./src/drizzle.ts",
       "default": "./dist/drizzle.js"
     }
   },

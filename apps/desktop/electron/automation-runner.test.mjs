@@ -127,6 +127,31 @@ test("a v1 runner credential cannot use an untrusted HTTPS endpoint", async () =
   assert.deepEqual(attempted, [])
 })
 
+test("a runner credential bound elsewhere reports why this desktop stays disconnected", async () => {
+  const logged = []
+  const attempted = []
+  const runner = createDesktopAutomationRunner({
+    getLocalRuntime: async () => ({ baseUrl: "http://127.0.0.1:3000", token: "local" }),
+    fetchImpl: async (url) => {
+      attempted.push(String(url))
+      throw new Error("no network in test")
+    },
+    log: (state) => logged.push(state),
+  })
+  runner.configure({
+    baseUrl: "https://den.example.com/api/den",
+    token: runnerTokenFor("https://api.example.com"),
+    runnerId: "runner-1",
+  })
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  runner.stop()
+  assert.deepEqual(attempted, [])
+  assert.deepEqual(logged, [
+    "rejected runner credential for https://den.example.com/api/den"
+      + ": token audience https://api.example.com",
+  ])
+})
+
 test("desktop Automation execution creates a normal visible local OpenWork thread", async () => {
   const requests = []
   let snapshots = 0

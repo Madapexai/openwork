@@ -2,11 +2,21 @@
 import { useCallback, useMemo, useState } from "react";
 import { installConfigSchema, parseInstallLinkInput } from "@openwork/install-config";
 
-import { createDenClient, readDenBootstrapConfig, readDenSettings, setDenBootstrapConfig } from "@/app/lib/den";
+import { clearDenSession, createDenClient, readDenBootstrapConfig, readDenSettings, setDenBootstrapConfig } from "@/app/lib/den";
 import { exchangeHandoffAndSignIn } from "@/app/lib/den-handoff";
 import { desktopFetchViaMain } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,7 +34,10 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { t } from "@/i18n";
+import { usePlatform } from "../../kernel/platform";
+import { saveControlPlaneUrl } from "../settings/cloud/control-plane-url";
 import { parseManualAuthInput } from "./forced-signin-page";
+import { parseInviteLinkInput, parseServerUrlInput, type ParsedInviteLink } from "./join-organization-input";
 
 type JoinOrganizationDialogProps = {
   open: boolean;
@@ -35,7 +48,9 @@ type JoinOrganizationDialogProps = {
 type ConnectionStatus =
   | { phase: "idle" }
   | { phase: "connecting"; clientName: string; host: string }
-  | { phase: "success"; clientName: string; host: string };
+  | { phase: "success"; clientName: string; host: string }
+  | { phase: "invite-opened"; host: string }
+  | { phase: "server-saved"; host: string };
 
 function hostFromUrl(value: string): string {
   try {
@@ -57,10 +72,12 @@ export function JoinOrganizationDialog({
   onOpenChange,
   onConnected,
 }: JoinOrganizationDialogProps) {
+  const platform = usePlatform();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>({ phase: "idle" });
+  const [pendingInvite, setPendingInvite] = useState<ParsedInviteLink | null>(null);
   const trimmedInput = input.trim();
   const statusMessage = useMemo(() => {
     if (status.phase === "connecting") {
@@ -74,6 +91,12 @@ export function JoinOrganizationDialog({
         clientName: status.clientName,
         host: status.host,
       });
+    }
+    if (status.phase === "invite-opened") {
+      return t("join_org.invite_opened", { host: status.host });
+    }
+    if (status.phase === "server-saved") {
+      return t("join_org.server_saved", { host: status.host });
     }
     return null;
   }, [status]);
@@ -144,6 +167,45 @@ export function JoinOrganizationDialog({
     return true;
   }, [finishConnected]);
 
+  const submitInviteLink = useCallback(async (value: string) => {
+    const parsed = parseInviteLinkInput(value);
+    if (!parsed) return false;
+
+    setPendingInvite(parsed);
+    return true;
+  }, []);
+
+  const confirmInviteLink = useCallback(async () => {
+    if (!pendingInvite) return;
+    const invite = pendingInvite;
+    setBusy(true);
+    setPendingInvite(null);
+    const persisted = await saveControlPlaneUrl(invite.origin);
+    if (!persisted) {
+      setError(t("join_org.error_invalid"));
+      setBusy(false);
+      return;
+    }
+    clearDenSession({ includeBaseUrls: false });
+    platform.openLink(invite.url);
+    setStatus({ phase: "invite-opened", host: invite.host });
+    setBusy(false);
+  }, [pendingInvite, platform]);
+
+  const submitServerUrl = useCallback(async (value: string) => {
+    const parsed = parseServerUrlInput(value);
+    if (!parsed) return false;
+
+    const persisted = await saveControlPlaneUrl(parsed.url);
+    if (!persisted) {
+      setError(t("join_org.error_invalid"));
+      return true;
+    }
+    clearDenSession({ includeBaseUrls: false });
+    setStatus({ phase: "server-saved", host: hostFromUrl(persisted.baseUrl) });
+    return true;
+  }, []);
+
   const submitManualAuth = useCallback(async (value: string) => {
     const parsed = parseManualAuthInput(value);
     if (!parsed) return false;
@@ -173,13 +235,18 @@ export function JoinOrganizationDialog({
     setBusy(true);
     reset();
     try {
+      // Install links first (most specific), then web invites, then plain
+      // server URLs, and finally pasted sign-in codes. Server URLs require an
+      // explicit http(s) scheme, so raw grants never misclassify.
       if (await submitInstallLink(trimmedInput)) return;
+      if (await submitInviteLink(trimmedInput)) return;
+      if (await submitServerUrl(trimmedInput)) return;
       if (await submitManualAuth(trimmedInput)) return;
       setError(t("join_org.error_invalid"));
     } finally {
       setBusy(false);
     }
-  }, [busy, reset, submitInstallLink, submitManualAuth, trimmedInput]);
+  }, [busy, reset, submitInstallLink, submitInviteLink, submitServerUrl, submitManualAuth, trimmedInput]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -228,6 +295,32 @@ export function JoinOrganizationDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <AlertDialog
+        open={Boolean(pendingInvite)}
+        onOpenChange={(next) => {
+          if (!next) setPendingInvite(null);
+        }}
+      >
+        <AlertDialogContent data-testid="join-invite-confirm-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("join_org.confirm_invite_title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingInvite ? t("join_org.confirm_invite_body", { host: pendingInvite.host }) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="join-invite-confirm-cancel">
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="join-invite-confirm-accept"
+              onClick={() => void confirmInviteLink()}
+            >
+              {t("join_org.confirm_invite_cta")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

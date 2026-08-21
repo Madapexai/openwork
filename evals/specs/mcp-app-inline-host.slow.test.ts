@@ -9,6 +9,7 @@ import { buildGeneratedArtifactViewInWorker } from "../../ee/apps/den-api/src/ge
 const providerId = "mcp-app-inline-host-mock";
 const modelId = "mcp-app-inline-host-model";
 const mcpServerName = "artifact-view";
+const saveToolName = "save_artifact_view";
 const mcpToolName = "render_card";
 const resourceUri = "ui://openwork/artifacts/arv_eval_card/views/avr_eval_card/index.html";
 const closingReply = "The interactive artifact card is ready.";
@@ -19,7 +20,7 @@ const title = !appSpecsEnabled
   ? "MCP App inline host skipped — needs: set OPENWORK_EVAL_APP_SPECS=1"
   : !localPlacement
     ? "MCP App inline host skipped — needs local placement without OPENWORK_EVAL_DEN_API_URL"
-    : "a standard MCP App renders its structured tool result inline in the conversation";
+    : "a generated Artifact saves normally, then initializes and renders structuredContent inline";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -27,6 +28,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function recordValue(value: unknown, key: string): unknown {
   return isRecord(value) ? value[key] : undefined;
+}
+
+function snapshotContainsMountedArtifact(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.strings) || !Array.isArray(value.documents)) return false;
+  const strings = value.strings.filter((entry): entry is string => typeof entry === "string");
+  return value.documents.some((document) => {
+    const nodes = recordValue(document, "nodes");
+    if (!isRecord(nodes)) return false;
+    const nodeNames = Array.isArray(nodes.nodeName)
+      ? nodes.nodeName.map((index) => typeof index === "number" ? strings[index] : undefined)
+      : [];
+    const nodeValue = recordValue(nodes, "nodeValue");
+    const valueIndexes = isRecord(nodeValue) && Array.isArray(nodeValue.value) ? nodeValue.value : [];
+    const text = valueIndexes
+      .map((index) => typeof index === "number" ? strings[index] ?? "" : "")
+      .join(" ");
+    return nodeNames.includes("ARTICLE") && text.includes("Quarterly plan") && text.includes("Ready");
+  });
+}
+
+async function waitForMountedArtifact(app: Awaited<ReturnType<typeof desktop>>, timeoutMs = 60_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const snapshot = await app.client.send("DOMSnapshot.captureSnapshot", {
+      computedStyles: [],
+      includePaintOrder: false,
+      includeDOMRects: false,
+    });
+    if (snapshotContainsMountedArtifact(snapshot)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
 }
 
 function readBody(request: IncomingMessage): Promise<string> {
@@ -97,18 +130,44 @@ function rpcResponse(message: Record<string, unknown>): Record<string, unknown> 
       jsonrpc: "2.0",
       id: message.id,
       result: {
-        tools: [{
-          name: mcpToolName,
-          title: "Render artifact card",
-          description: "Returns a deterministic structured artifact with a standard MCP App view.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-          annotations: { readOnlyHint: true, destructiveHint: false },
-          _meta: { ui: { resourceUri } },
-        }],
+        tools: [
+          {
+            name: saveToolName,
+            title: "Save artifact view",
+            description: "Saves the generated view without displaying an interactive UI.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            annotations: { readOnlyHint: false, destructiveHint: false },
+          },
+          {
+            name: mcpToolName,
+            title: "Render artifact card",
+            description: "Returns a deterministic structured artifact with a standard MCP App view.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            annotations: { readOnlyHint: true, destructiveHint: false },
+            _meta: { ui: { resourceUri } },
+          },
+        ],
       },
     };
   }
   if (message.method === "tools/call") {
+    const params = recordValue(message, "params");
+    if (recordValue(params, "name") === saveToolName) {
+      return {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          content: [{ type: "text", text: `Saved immutable Artifact view. Call ${mcpToolName} to display it.` }],
+          structuredContent: {
+            view: {
+              id: "arv_eval_card",
+              activeRevisionId: "avr_eval_card",
+              revisions: [{ id: "avr_eval_card", resourceUri }],
+            },
+          },
+        },
+      };
+    }
     return {
       jsonrpc: "2.0",
       id: message.id,
@@ -145,20 +204,21 @@ function rpcResponse(message: Record<string, unknown>): Record<string, unknown> 
   return { jsonrpc: "2.0", id: message.id, result: {} };
 }
 
-function providerToolName(payload: Record<string, unknown>): string | null {
+function providerToolName(payload: Record<string, unknown>, suffix: string): string | null {
   const tools = payload.tools;
   if (!Array.isArray(tools)) return null;
   for (const tool of tools) {
     const fn = recordValue(tool, "function");
     const name = recordValue(fn, "name");
-    if (typeof name === "string" && name.endsWith(mcpToolName)) return name;
+    if (typeof name === "string" && name.endsWith(suffix)) return name;
   }
   return null;
 }
 
-function hasToolResult(payload: Record<string, unknown>): boolean {
+function toolResultCount(payload: Record<string, unknown>): number {
   return Array.isArray(payload.messages)
-    && payload.messages.some((message) => recordValue(message, "role") === "tool");
+    ? payload.messages.filter((message) => recordValue(message, "role") === "tool").length
+    : 0;
 }
 
 function streamChunk(delta: Record<string, unknown>, finishReason: string | null = null): Record<string, unknown> {
@@ -188,7 +248,8 @@ function sendStream(response: ServerResponse, chunks: Record<string, unknown>[])
 test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, async ({ evidence }) => {
   needs({ optIn: ["OPENWORK_EVAL_APP_SPECS"] });
 
-  let toolCalls = 0;
+  let saveCalls = 0;
+  let renderCalls = 0;
   let resourceReads = 0;
   const mock = createServer((request, response) => {
     void (async () => {
@@ -210,7 +271,9 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
         for (const candidate of messages) {
           if (!isRecord(candidate)) continue;
           if (candidate.method === "tools/call") {
-            toolCalls += 1;
+            const called = recordValue(recordValue(candidate, "params"), "name");
+            if (called === saveToolName) saveCalls += 1;
+            if (called === mcpToolName) renderCalls += 1;
             // Keep the completed tool event inside the renderer's live event
             // subscription window, matching a realistic remote MCP round trip.
             delayMs = 4_000;
@@ -238,7 +301,8 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
           ]);
           return;
         }
-        if (hasToolResult(parsed)) {
+        const completedTools = toolResultCount(parsed);
+        if (completedTools >= 2) {
           sendStream(response, [
             streamChunk({ role: "assistant" }),
             streamChunk({ content: closingReply }),
@@ -246,14 +310,15 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
           ]);
           return;
         }
-        const toolName = providerToolName(parsed);
+        const nextTool = completedTools === 0 ? saveToolName : mcpToolName;
+        const toolName = providerToolName(parsed, nextTool);
         if (!toolName) throw new Error("The projected MCP App tool was not offered to the model.");
         sendStream(response, [
           streamChunk({ role: "assistant" }),
           streamChunk({
             tool_calls: [{
               index: 0,
-              id: "call_mcp_app_card",
+              id: completedTools === 0 ? "call_save_artifact_view" : "call_mcp_app_card",
               type: "function",
               function: { name: toolName, arguments: "{}" },
             }],
@@ -383,7 +448,7 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
     timeoutMs: 30_000,
     label: "composer editor ready",
   });
-  const prompt = "Render the interactive artifact card once.";
+  const prompt = "Save the generated Artifact view, then render the interactive artifact card once.";
   const focused = await evalIn(app, `(() => {
     const editor = document.querySelector('[contenteditable="true"][data-lexical-editor="true"]');
     if (!(editor instanceof HTMLElement)) return false;
@@ -403,7 +468,8 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
     timeoutMs: 60_000,
     label: "sandboxed MCP App iframe",
   });
-  expect(toolCalls).toBe(1);
+  expect(saveCalls).toBe(1);
+  expect(renderCalls).toBe(1);
   expect(resourceReads).toBeGreaterThanOrEqual(1);
 
   const hostClaim = await evalIn(app, `(() => {
@@ -418,10 +484,17 @@ test.skipIf(!appSpecsEnabled || !localPlacement)(title, { timeout: 240_000 }, as
       && !frame.hasAttribute("srcdoc");
   })()`);
   expect(hostClaim).toBe(true);
+  const mountedReact = await waitForMountedArtifact(app);
+  expect(mountedReact).toBe(true);
+  const transcript = await evalIn(app, `document.body?.innerText ?? ""`);
+  expect(transcript).not.toContain("MCP_APP_INITIALIZE_TIMEOUT");
+  expect(transcript).not.toContain("MCP_APP_RESOURCE_ACCEPT_TIMEOUT");
+  expect(transcript).not.toContain("MCP_APP_RESOURCE_NOT_FOUND");
+  expect(transcript).not.toContain("Interactive view unavailable");
   evidence.fact(
-    "The completed MCP tool result resolves and mounts its declared standard UI resource",
-    `Observed one tools/call, ${resourceReads} blob-backed resources/read request(s), and a different-origin sandbox proxy with the stable sandbox flags.`,
-    hostClaim === true && toolCalls === 1 && resourceReads >= 1,
+    "The completed MCP tool result resolves, initializes, receives structuredContent, and visibly mounts React",
+    `Observed one save tools/call without UI, one render tools/call, ${resourceReads} blob-backed resources/read request(s), a different-origin sandbox proxy with the stable sandbox flags, and the generated ARTICLE DOM containing Quarterly plan and Ready.`,
+    hostClaim === true && mountedReact && saveCalls === 1 && renderCalls === 1 && resourceReads >= 1,
   );
 
   const shot = await screenshot(app);

@@ -76,7 +76,7 @@ export default function WebPage() {
     <DashboardPageTemplate
       icon={Globe}
       badgeLabel="Alpha"
-      title="Web"
+      title="OpenWork Web"
       description="Open OpenWork in your browser."
       colors={["#EFF6FF", "#0F172A", "#2563EB", "#BAE6FD"]}
     >

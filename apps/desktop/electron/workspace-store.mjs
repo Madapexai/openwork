@@ -401,9 +401,12 @@ export function createWorkspaceStore({
   }
 
   function bundleSearchRoots() {
-    const roots = [];
+    // An explicit override is exclusive: isolated surfaces (evals, demos) set it
+    // so a bundle in the user's real ~/Downloads can never leak into a fresh
+    // profile — on macOS app.getPath("downloads") ignores the HOME override.
     const override = process.env.OPENWORK_BOOTSTRAP_BUNDLE_DIR?.trim();
-    if (override) roots.push(path.resolve(override));
+    if (override) return [path.resolve(override)];
+    const roots = [];
     for (const name of ["downloads", "desktop"]) {
       try {
         const candidate = app.getPath(name);

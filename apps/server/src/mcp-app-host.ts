@@ -15,7 +15,7 @@ const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MAX_TOOL_PAGES = 32;
 const MAX_TOOLS = 2_048;
-const MAX_RESOURCE_BYTES = 512 * 1024;
+const MAX_RESOURCE_BYTES = 768 * 1024;
 const MAX_RESULT_BYTES = 1024 * 1024;
 
 type McpAppCsp = {
@@ -212,7 +212,7 @@ function toolVisibility(tool: Partial<Tool>, audience: "model" | "app"): boolean
 
 function strictBase64Bytes(value: string): Uint8Array {
   if (value.length > Math.ceil(MAX_RESOURCE_BYTES / 3) * 4) {
-    throw new McpAppHostError("resource_too_large", "The MCP App resource exceeds the 512 KiB host limit.");
+    throw new McpAppHostError("resource_too_large", "The MCP App resource exceeds the 768 KiB host limit.");
   }
   if (value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     throw new McpAppHostError("invalid_resource", "The MCP App resource blob is not valid base64.");
@@ -251,7 +251,7 @@ function findHtmlResource(
   }
   const decoded = decodeResourceHtml(content);
   if (decoded.bytes > MAX_RESOURCE_BYTES) {
-    throw new McpAppHostError("resource_too_large", "The MCP App resource exceeds the 512 KiB host limit.");
+    throw new McpAppHostError("resource_too_large", "The MCP App resource exceeds the 768 KiB host limit.");
   }
   return { html: decoded.html, meta: content._meta };
 }
@@ -271,6 +271,7 @@ export async function resolveMcpAppResource(input: {
     && input.projectedToolName.startsWith(`${item.name.replace(/[^a-zA-Z0-9_-]/g, "_")}_`)
   ));
   const matches: McpAppResource[] = [];
+  const resolutionErrors: McpAppHostError[] = [];
   for (const item of candidates) {
     if (!remoteUrl(item.config)) continue;
     const match = await withRemoteClient(item.config, async (client) => {
@@ -279,12 +280,18 @@ export async function resolveMcpAppResource(input: {
       ));
       if (!tool) return null;
       if (!toolVisibility(tool, "model")) return null;
+      const resourceUri = toolUiResourceUri(tool);
+      if (!resourceUri) return null;
       if ((await diagnoseMcpToolDenies(input.workspaceRoot, item.name, [input.projectedToolName])).length > 0) {
         throw new McpAppHostError("tool_denied", "This MCP App tool is denied by the workspace tool policy.");
       }
-      const resourceUri = toolUiResourceUri(tool);
-      if (!resourceUri) return null;
-      const resource = findHtmlResource(resourceUri, await client.readResource({ uri: resourceUri }));
+      const read = await client.readResource({ uri: resourceUri }).catch(() => {
+        throw new McpAppHostError(
+          "resource_read_failed",
+          "The current MCP App tool definition advertises a resource that resources/read could not load.",
+        );
+      });
+      const resource = findHtmlResource(resourceUri, read);
       const presentation = resourcePresentationMeta(resource.meta);
       return {
         serverName: item.name,
@@ -295,6 +302,9 @@ export async function resolveMcpAppResource(input: {
       } satisfies McpAppResource;
     }).catch((error) => {
       if (error instanceof McpAppHostError && error.code !== "mcp_unreachable") throw error;
+      resolutionErrors.push(error instanceof McpAppHostError
+        ? error
+        : new McpAppHostError("mcp_app_resolution_failed", "The MCP App resource could not be resolved."));
       return null;
     });
     if (match) matches.push(match);
@@ -302,6 +312,7 @@ export async function resolveMcpAppResource(input: {
   if (matches.length > 1) {
     throw new McpAppHostError("ambiguous_tool", "More than one configured MCP App matches this projected tool name.");
   }
+  if (matches.length === 0 && resolutionErrors[0]) throw resolutionErrors[0];
   return matches[0] ?? null;
 }
 

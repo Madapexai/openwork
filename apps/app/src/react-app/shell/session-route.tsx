@@ -206,6 +206,7 @@ import {
   shouldRefetchCloudWorkspaceOnReadyTransition,
 } from "./cloud-workspace-status";
 import { getReactQueryClient } from "@/react-app/infra/query-client";
+import { snapshotKey as sessionSnapshotKey } from "@/react-app/domains/session/sync/session-sync";
 import { useSessionControlActions } from "@/react-app/domains/session/control/session-control-actions";
 import {
   globalExtensionsRoute,
@@ -632,6 +633,14 @@ export function SessionRoute() {
     },
     [local.setPrefs],
   );
+  // Default model of the active CLI agent (Agent.model). Resolved below via
+  // listAgents so the model picker can prioritize this agent's models and
+  // confirm before registering unsupported ones as optional models.
+  const [agentDefaultModel, setAgentDefaultModel] = useState<ModelRef | null>(null);
+  // Whether the selected agent is an injected CLI agent (source === "openwork").
+  // Only CLI agents get the dual-tab model picker and optional-model registration;
+  // built-in agents (build/plan) already accept every connected provider model.
+  const [selectedAgentIsCli, setSelectedAgentIsCli] = useState(false);
   // One-way latch for "a refreshRouteState is currently running"; prevents
   // overlapping route refreshes from queueing up when the user clicks fast.
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
@@ -1208,6 +1217,28 @@ export function SessionRoute() {
     return list.filter((agent) => !agent.hidden && agent.mode !== "subagent");
   }, [engineReloadVersion, opencodeClient]);
 
+  useEffect(() => {
+    let alive = true;
+    setAgentDefaultModel(null);
+    setSelectedAgentIsCli(false);
+    if (!selectedAgent) return;
+    void Promise.resolve(listAgents()).then((list) => {
+      if (!alive) return;
+      const agent = list.find((item) => item.name === selectedAgent);
+      setAgentDefaultModel(agent?.model ?? null);
+      // Injected CLI agents carry source: "openwork" (enrichOpencodeAgentList)
+      setSelectedAgentIsCli((agent as unknown as { source?: string } | undefined)?.source === "openwork");
+    }).catch(() => {
+      if (alive) {
+        setAgentDefaultModel(null);
+        setSelectedAgentIsCli(false);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [selectedAgent, listAgents]);
+
   const handleOpenSettings = useCallback((route = "/settings/general", workspaceId = sidebarActiveWorkspaceId) => {
     const sessionId = workspaceId === sidebarActiveWorkspaceId ? selectedSessionId : null;
     const tab = route.replace(/^\/settings\/?/, "").replace(/^\/+|\/+$/g, "") || "general";
@@ -1345,12 +1376,23 @@ export function SessionRoute() {
                 // This remains inside the post-readiness send closure so a blocked
                 // Cloud submission cannot create a run or report that one started.
                 const projectDimension = readWorkspaceProjectDimension(selectedWorkspaceId);
-                const telemetryDimensions = projectDimension
-                  ? [{
-                      type: "project",
-                      label: projectDimension.label,
-                    }]
-                  : undefined;
+                const modelSelection = sessionModelSelection ? "manual" : "default";
+                const telemetryDimensions = [
+                  ...(projectDimension ? [{
+                    type: "project",
+                    label: projectDimension.label,
+                  }] : []),
+                  ...(sendModel ? [{
+                    type: "model",
+                    value: `${sendModel.providerID}/${sendModel.modelID}`,
+                    label: `${sendModel.providerID}/${sendModel.modelID}`,
+                  }] : []),
+                  {
+                    type: "model_selection",
+                    value: modelSelection,
+                    label: modelSelection,
+                  },
+                ];
                 trackSessionActive(targetSessionId, telemetryDimensions);
                 trackTaskStarted(targetSessionId, telemetryDimensions);
 
@@ -1387,6 +1429,12 @@ export function SessionRoute() {
                 if (result.error) {
                   throw new Error(serializeSDKError(result.error));
                 }
+                // CLI agent 会话没有 opencode SSE 事件流，发送成功后主动失效
+                // snapshot 缓存触发一次 refetch，让 busy 状态落地、启动轮询；
+                // opencode 会话多一次 refetch 无害（SSE 会覆盖）。
+                void getReactQueryClient().invalidateQueries({
+                  queryKey: sessionSnapshotKey(selectedWorkspaceId, targetSessionId),
+                });
                 // Remember what this conversation used last so returning to it
                 // (or splitting it beside another session) keeps its own model.
                 if (sendModel) {
@@ -1420,6 +1468,8 @@ export function SessionRoute() {
       },
       agentLabel: selectedAgent ? selectedAgent.charAt(0).toUpperCase() + selectedAgent.slice(1) : t("session.default_agent"),
       selectedAgent,
+      agentIsCli: selectedAgentIsCli,
+      agentDefaultModel,
       listAgents,
       onSelectAgent: (agent: string | null) => setSelectedAgent(agent),
       listCommands: listSlashCommands,
@@ -1549,7 +1599,7 @@ export function SessionRoute() {
     !cloudWorkspace.gatewayMode ||
     !cloudWorkspace.visible ||
     cloudWorkspaceStatusHasReadyContent(cloudWorkspace.viewModel.variant);
-  const cloudWorkspaceMainContentTakeover = !bootOverlayVisible && cloudWorkspaceMainContentDecision === "takeover" ? (
+  const cloudWorkspaceMainContentTakeover = cloudWorkspaceMainContentDecision === "takeover" ? (
     <CloudWorkspaceBootTakeover decision={cloudWorkspaceMainContentDecision} />
   ) : null;
   const gatedRouteNotFoundMessage = cloudWorkspaceReadyForRouteErrors ? routeNotFoundMessage : null;
@@ -1597,6 +1647,8 @@ export function SessionRoute() {
       },
       agentLabel: selectedAgent ? selectedAgent.charAt(0).toUpperCase() + selectedAgent.slice(1) : t("session.default_agent"),
       selectedAgent,
+      agentIsCli: selectedAgentIsCli,
+      agentDefaultModel,
       listAgents,
       onSelectAgent: (agent: string | null) => setSelectedAgent(agent),
       listCommands: listSlashCommands,
@@ -2967,6 +3019,8 @@ export function SessionRoute() {
       setQuery={modelPicker.setQuery}
       subtitle={selectedModelUnavailable ? MODEL_PICKER_UNAVAILABLE_SUBTITLE : undefined}
       target="default"
+      agentId={selectedAgentIsCli ? selectedAgent : null}
+      agentDefaultModel={agentDefaultModel}
       current={
         (modelPickerSessionId ? getSessionModelSelection(modelPickerSessionId)?.model : null)
           ?? local.prefs.defaultModel

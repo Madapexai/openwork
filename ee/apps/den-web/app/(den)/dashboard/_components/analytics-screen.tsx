@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, CheckCircle2, ChevronRight, Clock, Users, Zap } from "lucide-react";
+import { Activity, CheckCircle2, ChevronRight, Clock, MousePointerClick, Users, Zap } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { requestJson } from "../../_lib/den-flow";
 import { DenSelect } from "../../_components/ui/select";
@@ -18,6 +18,12 @@ type AnalyticsWeek = {
   tasksFailed: number;
 };
 
+type ModelUsage = {
+  id: string;
+  label: string;
+  sessions: number;
+};
+
 type AnalyticsData = {
   members: number;
   pendingInvites: number;
@@ -31,6 +37,13 @@ type AnalyticsData = {
   tasksFailed30d: number;
   avgTaskDurationMs30d: number | null;
   weekly: AnalyticsWeek[];
+  models: {
+    usage30d: ModelUsage[];
+    selection30d: {
+      default: number;
+      manual: number;
+    };
+  };
 };
 
 type DimensionOption = {
@@ -80,6 +93,14 @@ function readDimensionOption(value: unknown): DimensionOption | null {
   };
 }
 
+function readModelUsage(value: unknown): ModelUsage | null {
+  const item = readObject(value);
+  const id = typeof item.id === "string" ? item.id : "";
+  const label = typeof item.label === "string" ? item.label : "";
+  if (!id || !label) return null;
+  return { id, label, sessions: readNumber(item.sessions) };
+}
+
 async function fetchDimensions(type: string): Promise<DimensionOption[]> {
   try {
     const params = new URLSearchParams({ type });
@@ -105,6 +126,8 @@ async function fetchAnalytics(dimensionValue: string): Promise<AnalyticsData | n
     const { response, payload } = await requestJson(path, { method: "GET" }, 12000);
     if (!response.ok || !payload || typeof payload !== "object") return null;
     const p = readObject(payload);
+    const models = readObject(p.models);
+    const modelSelection = readObject(models.selection30d);
     return {
       members: readNumber(p.members),
       pendingInvites: readNumber(p.pendingInvites),
@@ -118,6 +141,18 @@ async function fetchAnalytics(dimensionValue: string): Promise<AnalyticsData | n
       tasksFailed30d: readNumber(p.tasksFailed30d),
       avgTaskDurationMs30d: typeof p.avgTaskDurationMs30d === "number" ? p.avgTaskDurationMs30d : null,
       weekly: Array.isArray(p.weekly) ? p.weekly.map(readWeek) : [],
+      models: {
+        usage30d: Array.isArray(models.usage30d)
+          ? models.usage30d.flatMap((item) => {
+              const usage = readModelUsage(item);
+              return usage ? [usage] : [];
+            })
+          : [],
+        selection30d: {
+          default: readNumber(modelSelection.default),
+          manual: readNumber(modelSelection.manual),
+        },
+      },
     };
   } catch {
     return null;
@@ -155,6 +190,11 @@ function successRate(completed: number, failed: number): string {
   const total = completed + failed;
   if (total === 0) return "—";
   return `${Math.round((completed / total) * 100)}%`;
+}
+
+function selectionShare(value: number, defaultCount: number, manualCount: number): string {
+  const total = defaultCount + manualCount;
+  return total === 0 ? "No model sessions yet" : `${Math.round((value / total) * 100)}% of model sessions`;
 }
 
 function toneBg(tone: "violet" | "green" | "blue" | "amber") {
@@ -256,6 +296,32 @@ function TrendChart({ title, subtitle, weeks, series }: {
   );
 }
 
+function ModelUsageList({ models, isLoading }: { models: ModelUsage[]; isLoading: boolean }) {
+  const max = Math.max(1, ...models.map((model) => model.sessions));
+
+  return (
+    <div className="rounded-[16px] border border-[#e3e7ee] bg-white/90 p-4">
+      <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-[#07192C]">Sessions by model</h3>
+      <p className="mt-0.5 text-[12px] text-[#637291]">Distinct sessions, last 30 days</p>
+      <div className="mt-4 space-y-3">
+        {isLoading ? <p className="text-[12px] text-[#637291]">Loading model usage…</p> : null}
+        {!isLoading && models.length === 0 ? <p className="text-[12px] text-[#637291]">No model usage yet</p> : null}
+        {models.map((model) => (
+          <div key={model.id}>
+            <div className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="min-w-0 truncate font-medium text-[#30405F]" title={model.label}>{model.label}</span>
+              <span className="shrink-0 tabular-nums text-[#637291]">{model.sessions}</span>
+            </div>
+            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EBEEF4]">
+              <div className="h-full rounded-full bg-[#6F3DFF]" style={{ width: `${(model.sessions / max) * 100}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── Main screen ── */
 
 export function AnalyticsScreen() {
@@ -291,6 +357,9 @@ export function AnalyticsScreen() {
   const weekly = data?.weekly ?? [];
   const tasks7d = (data?.tasksCompleted7d ?? 0) + (data?.tasksFailed7d ?? 0);
   const isProjectFiltered = Boolean(selectedProjectValue);
+  const modelUsage = data?.models.usage30d ?? [];
+  const defaultModelSessions = data?.models.selection30d.default ?? 0;
+  const manualModelSessions = data?.models.selection30d.manual ?? 0;
 
   return (
     <div className="mx-auto max-w-[1100px] px-4 pb-8 pt-4 sm:px-6 md:px-8">
@@ -405,6 +474,31 @@ export function AnalyticsScreen() {
             { label: "Failed", color: "#E5484D", values: weekly.map((w) => w.tasksFailed) },
           ]}
         />
+      </div>
+
+      {/* Model usage */}
+      <div className="mt-5">
+        <h2 className="text-[16px] font-semibold tracking-[-0.02em] text-[#07192C]">Models</h2>
+        <p className="mt-0.5 text-[12px] text-[#637291]">See which models your team uses and how they are selected.</p>
+        <div className="mt-3 grid gap-3.5 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+          <ModelUsageList models={modelUsage} isLoading={isLoading} />
+          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-1">
+            <StatCard
+              icon={<Zap className="h-5 w-5 text-[#B7791F]" />}
+              title="Default model"
+              value={isLoading ? "…" : `${defaultModelSessions}`}
+              sub={selectionShare(defaultModelSessions, defaultModelSessions, manualModelSessions)}
+              tone="amber"
+            />
+            <StatCard
+              icon={<MousePointerClick className="h-5 w-5 text-[#6F3DFF]" />}
+              title="Manually selected"
+              value={isLoading ? "…" : `${manualModelSessions}`}
+              sub={selectionShare(manualModelSessions, defaultModelSessions, manualModelSessions)}
+              tone="violet"
+            />
+          </div>
+        </div>
       </div>
 
       {/* 30-day detail */}

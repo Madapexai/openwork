@@ -80,3 +80,14 @@ evals/results/
 
 # Warden local run logs
 .warden/logs/
+.aider*
+
+# Local runtime / verification artifacts
+dump.rdb
+.ow-verify/
+.openwork-dev-profile/
+team-board-verify.png
+detect-test.mts
+hi
+apps/desktop/hi
+apps/server/hi

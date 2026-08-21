@@ -249,7 +249,7 @@ function BootStageRow(props: { stage: CloudWorkspaceBootStage; reduceMotion: boo
               />
             </svg>
           ) : stage.state === "active" ? (
-            <OwDotTicker size="md" />
+            <span className="size-2.5 rounded-full bg-dls-accent" />
           ) : (
             <span className="size-2.5 rounded-full border-[1.5px] border-[rgb(var(--dls-secondary-rgb)/0.45)]" />
           )}

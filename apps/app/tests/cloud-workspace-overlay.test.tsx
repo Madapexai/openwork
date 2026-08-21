@@ -20,6 +20,7 @@ import {
   mapCloudWorkspaceState,
   shouldShowCloudWorkspaceStatusPill,
   shouldRefetchCloudWorkspaceOnReadyTransition,
+  shouldSuppressBootOverlayForGateway,
 } from "../src/react-app/shell/cloud-workspace-status";
 import type { CloudWorkspaceMainContentDecision, CloudWorkspacePillVariant } from "../src/react-app/shell/cloud-workspace-status";
 import { BootStateProvider } from "../src/react-app/shell/boot-state";
@@ -299,6 +300,35 @@ describe("cloud workspace boot takeover", () => {
     // The old bar was hardcoded to two thirds and pulsed there forever.
     expect(html).not.toContain("w-2/3");
     expect(html).not.toContain("animate-pulse");
+  });
+
+  test("keeps a single wait indicator on the takeover card", () => {
+    const html = renderTakeover("provisioning");
+    // One 3x3 ticker lives in the header; checkpoints use a static dot.
+    expect(html.split("ow-dot-ticker").length - 1).toBe(9);
+  });
+
+  test("does not stack the generic boot overlay on top of the gateway takeover", () => {
+    expect(shouldSuppressBootOverlayForGateway({
+      gatewayMode: true,
+      signedIn: true,
+      variant: "provisioning",
+    })).toBe(true);
+    expect(shouldSuppressBootOverlayForGateway({
+      gatewayMode: true,
+      signedIn: true,
+      variant: "waking",
+    })).toBe(true);
+    expect(shouldSuppressBootOverlayForGateway({
+      gatewayMode: true,
+      signedIn: true,
+      variant: "ready",
+    })).toBe(false);
+    expect(shouldSuppressBootOverlayForGateway({
+      gatewayMode: false,
+      signedIn: true,
+      variant: "waking",
+    })).toBe(false);
   });
 
   test("keeps the wait calm until the promised minute is at risk", () => {

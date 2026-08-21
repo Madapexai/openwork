@@ -192,7 +192,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const MAX_PRESERVED_MCP_APP_RESULT_BYTES = 1024 * 1024;
 
-function preserveMcpAppResult(output: unknown): void {
+function preserveMcpResult(output: unknown): void {
   if (!isRecord(output) || !Array.isArray(output.content)) return;
 
   const appResult = {
@@ -209,6 +209,8 @@ function preserveMcpAppResult(output: unknown): void {
   const existing = isRecord(output.metadata) ? output.metadata : {};
   output.metadata = {
     ...existing,
+    // This is transport-only result preservation. Whether the completed tool
+    // owns an MCP App is determined later from its current tool definition.
     openworkMcpApp: appResult,
   };
 }
@@ -922,7 +924,7 @@ export const OpenWorkExtensionsPreview = async (factoryInput?: unknown) => {
     // structuredContent and result _meta before persisting the completed tool
     // part. Preserve those standard fields in the existing metadata channel
     // so OpenWork can host the UI without replaying the tool call.
-    preserveMcpAppResult(output);
+    preserveMcpResult(output);
   },
   "experimental.chat.system.transform": async (input: unknown, output: { system: string[] }) => {
     const mergedInput = mergeTransformInputWithFactoryContext(input, factoryContext);

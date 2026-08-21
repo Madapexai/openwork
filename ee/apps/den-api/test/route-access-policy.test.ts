@@ -118,4 +118,11 @@ describe("Den API route access policies", () => {
 
     expect(missingPolicy.map((route) => `${route.filePath}:${route.line}`)).toEqual([])
   })
+
+  test("organization analytics requires an admin role", () => {
+    const analyticsRoute = findRouteCalls(join(srcRoot, "routes/telemetry/index.ts"))
+      .find((route) => route.call.includes('"/v1/telemetry/analytics"'))
+
+    expect(analyticsRoute?.call).toContain('orgRoleRoute(["admin"])')
+  })
 })

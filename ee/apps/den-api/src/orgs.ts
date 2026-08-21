@@ -1465,6 +1465,7 @@ export async function resolveUserOrganizations(input: {
 export async function getOrganizationContextForUser(input: {
   userId: UserId
   organizationId: OrgId
+  siteId?: string
 }) {
   const organizationRows = await db
     .select()
@@ -1524,6 +1525,7 @@ export async function getOrganizationContextForUser(input: {
       logo: organization.logo,
       allowedEmailDomains: normalizeStoredAllowedEmailDomains(organization.allowedEmailDomains),
       metadata: serializeOrganizationMetadata(organization.metadata),
+      siteId: organization.siteId,
       createdAt: organization.createdAt,
       updatedAt: organization.updatedAt,
     },

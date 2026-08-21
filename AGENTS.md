@@ -47,6 +47,17 @@ even before a dedicated UI exists.
   narration, PR against `dev` with the tape. The `voiceover` skill owns the
   journey.
 
+## Local headless web (agents)
+
+- `pnpm dev:headless-web --detach` launches an isolated browser UI + local
+ `openwork-server` without Electron, detached from the invoking shell. Read
+ `tmp/dev-headless-web.json` for `webUrl`, tokens, logs, and Den proxy URLs.
+ It does not use `~/.config/openwork/server.json`. Re-running reuses a healthy
+ instance; `--replace` restarts it with fresh tokens (`--keep-tokens` to
+ keep the previous ones). Cloud sign-in is copy/paste handoff (Den cannot
+ redirect grants to localhost): Account → Sign in → copy OpenWork link on Den
+ → Paste sign-in code in Settings.
+
 ## Coding
 
 - pnpm only, never npm/yarn. TypeScript: never `any`, typecasts, or `as` unless

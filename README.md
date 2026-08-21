@@ -98,3 +98,32 @@ That sets `OPENWORK_DEV_PROFILE=auto`, derives a stable profile name from the wo
 Dev startup prints a banner like `[openwork] dev profile=... cdp=http://127.0.0.1:9223`; use it to find the profile directory and pass the CDP URL to local tooling.
 
 If a second instance cannot get the profile lock it now says so and exits, instead of lingering with an open CDP port and no window.
+
+### Headless web (no Electron)
+
+To run the OpenWork UI in a browser against a local `openwork-server` (no desktop shell):
+
+```bash
+pnpm dev:headless-web
+```
+
+This is an isolated launcher:
+
+- Writes `tmp/headless-server.json` and never reads `~/.config/openwork/server.json`
+- Authorizes the chosen workspace root automatically, and merges (never rewrites) that config on relaunch, so workspaces you add through the UI survive `--replace`
+- Starts Vite + `openwork-server` with a stable owner bearer forced into the UI. Crash-restarts reuse that bearer so open tabs keep working; `--replace` mints fresh tokens (pass `--keep-tokens` to preserve them). The privileged host token stays on the server process and is never inlined into the Vite bundle.
+- Proxies Den Cloud calls same-origin: Vite serves `/api/den` (forwarded to the Den control plane) and the app pins its Den API there via `VITE_DEN_API_BASE_URL`, so Cloud calls are never CORS-blocked and stale `localStorage` base URLs are cleared on load
+- Publishes agent-facing URLs/tokens at `tmp/dev-headless-web.json` (owner-only, `0600`), and allows browser calls to the local server only from the web app's own origins — not every site you visit
+- Uses stable ports by default (web `5178`, server `8778`; falls back to free ports when taken, override with `OPENWORK_WEB_PORT` / `OPENWORK_PORT`)
+- Is single-instance per worktree: re-running it reuses a healthy instance and prints its URL; stale instances are cleaned up automatically; `--replace` forces a restart
+- Detaches the servers from the launching terminal, so they survive the terminal closing
+- Supports `--detach` to run the whole stack independent of the invoking shell (recommended for agents): it starts detached, waits for health, prints the URLs, and exits
+
+Open the printed Web URL. Cloud sign-in in headless web uses the **copy/paste** handoff (hosted Den cannot redirect session grants back to `http://127.0.0.1`):
+
+1. Account → Sign in (opens Den; the paste field opens in Settings)
+2. Sign in on Den
+3. Copy the OpenWork link / one-time code Den shows
+4. Paste it under **Paste sign-in code** → Finish sign-in
+
+Point Den at a local stack with `OPENWORK_DEV_DEN_PROXY_TARGET=http://127.0.0.1:3005` while `pnpm dev:web-local` is running. Set `OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY=0` to disable the Den wiring.

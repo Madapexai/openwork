@@ -14,6 +14,7 @@ const ENV_KEYS = [
   "HOME",
   "LOCALAPPDATA",
   "OPENCODE_CONFIG_DIR",
+  "OPENWORK_BOOTSTRAP_BUNDLE_DIR",
   "OPENWORK_DATA_DIR",
   "OPENWORK_DESKTOP_BOOTSTRAP_PATH",
   "OPENWORK_DESKTOP_DISABLE_WORKSPACE_RECOVERY",
@@ -80,6 +81,7 @@ test("electronSurfaceEnv matches the isolated Electron demo contract", () => {
   assert.equal(env.APPDATA, paths.appDataDir);
   assert.equal(env.HOME, paths.homeDir);
   assert.equal(env.LOCALAPPDATA, paths.localAppDataDir);
+  assert.equal(env.OPENWORK_BOOTSTRAP_BUNDLE_DIR, join(paths.root, "bootstrap-bundle"));
   assert.equal(env.OPENWORK_DATA_DIR, paths.dataDir);
   assert.equal(env.OPENWORK_DESKTOP_BOOTSTRAP_PATH, paths.bootstrapPath);
   assert.equal(env.OPENWORK_ENV_STORE, paths.envStorePath);

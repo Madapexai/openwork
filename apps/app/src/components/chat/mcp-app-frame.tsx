@@ -5,16 +5,36 @@ import type { DynamicToolUIPart } from "ai"
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 
-import type { OpenworkMcpAppResource, OpenworkMcpAppToolResult } from "@/app/lib/openwork-server"
+import { OpenworkServerError, type OpenworkMcpAppResource, type OpenworkMcpAppToolResult } from "@/app/lib/openwork-server"
 import { useWorkspace } from "@/react-app/shell/workspace-provider"
 import { cn } from "@/lib/utils"
+import {
+  formatMcpAppDiagnostic,
+  safeMcpAppDiagnosticMessage,
+  type McpAppDiagnostic,
+  type McpAppDiagnosticStage,
+} from "./mcp-app-diagnostics"
 
 const MIN_HEIGHT = 160
 const MAX_HEIGHT = 800
 const DEFAULT_HEIGHT = 320
 const SIZE_EVENT_INTERVAL_MS = 100
 const SANDBOX_READY_TIMEOUT_MS = 5_000
+const RESOURCE_ACCEPT_TIMEOUT_MS = 1_000
+const MAX_RESOURCE_SEND_ATTEMPTS = 2
 const INITIALIZE_TIMEOUT_MS = 10_000
+
+const ACTIONABLE_MCP_APP_RESOLUTION_CODES = new Set([
+  "ambiguous_tool",
+  "invalid_resource",
+  "invalid_resource_csp",
+  "invalid_resource_mime",
+  "invalid_resource_uri",
+  "resource_read_failed",
+  "resource_too_large",
+  "tool_denied",
+  "unsupported_resource_permissions",
+])
 
 type PreservedMcpAppResult = {
   content: Array<Record<string, unknown>>
@@ -28,7 +48,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function preservedResult(part: DynamicToolUIPart): PreservedMcpAppResult | null {
   const openwork = isRecord(part.callProviderMetadata?.openwork) ? part.callProviderMetadata.openwork : null
-  const result = openwork && isRecord(openwork.mcpApp) ? openwork.mcpApp : null
+  const result = openwork && isRecord(openwork.mcpResult)
+    ? openwork.mcpResult
+    : openwork && isRecord(openwork.mcpApp)
+      ? openwork.mcpApp
+      : null
   if (!result || !Array.isArray(result.content)) return null
   const content = result.content.filter(isRecord) as Array<Record<string, unknown>>
   if (content.length !== result.content.length) return null
@@ -92,25 +116,49 @@ function mcpToolResult(result: OpenworkMcpAppToolResult): CallToolResult {
   return result as CallToolResult
 }
 
+export function isActionableMcpAppResolutionError(cause: unknown): boolean {
+  return cause instanceof OpenworkServerError && ACTIONABLE_MCP_APP_RESOLUTION_CODES.has(cause.code)
+}
+
 export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
   const { openworkServerClient, workspaceId } = useWorkspace()
   const result = useMemo(() => preservedResult(part), [part])
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [app, setApp] = useState<OpenworkMcpAppResource | null>(null)
   const [height, setHeight] = useState(DEFAULT_HEIGHT)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<McpAppDiagnostic | null>(null)
+  const [detailsCopied, setDetailsCopied] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setApp(null)
     setError(null)
+    setDetailsCopied(false)
     if (!result || !openworkServerClient || !workspaceId) return () => { cancelled = true }
+    const startedAt = performance.now()
     void openworkServerClient.resolveMcpApp(workspaceId, part.toolName)
       .then(({ app: resolved }) => {
-        if (!cancelled) setApp(resolved)
+        if (cancelled) return
+        // A preserved MCP result is neutral transport data. A null resolution
+        // means the current tool definition does not advertise an MCP App, so
+        // ordinary tools such as save_artifact_view render only their normal
+        // result without claiming an unavailable interactive view.
+        setApp(resolved)
       })
       .catch((cause) => {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : "The interactive view could not be loaded.")
+        if (!cancelled && isActionableMcpAppResolutionError(cause)) {
+          const diagnostic: McpAppDiagnostic = {
+            code: "MCP_APP_RESOURCE_RESOLUTION_FAILED",
+            ...(cause instanceof OpenworkServerError ? { causeCode: cause.code } : {}),
+            stage: "resource-resolution",
+            message: safeMcpAppDiagnosticMessage(cause, "The interactive view resource could not be resolved."),
+            toolName: part.toolName,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            checkpoints: ["resolve-started"],
+          }
+          console.error(`[OpenWork MCP App] ${diagnostic.code}`, diagnostic)
+          setError(diagnostic)
+        }
       })
     return () => { cancelled = true }
   }, [openworkServerClient, part.toolName, result, workspaceId])
@@ -120,6 +168,46 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
     if (!app || !result || !iframe || !iframe.contentWindow || !openworkServerClient || !workspaceId) return
     let disposed = false
     let lastSizeEventAt = 0
+    const startedAt = performance.now()
+    const checkpoints: string[] = []
+    let sandboxDocument: McpAppDiagnostic["sandboxDocument"]
+    let failed = false
+    const checkpoint = (name: string) => checkpoints.push(`${name}+${Math.round(performance.now() - startedAt)}ms`)
+    const fail = (
+      code: string,
+      stage: McpAppDiagnosticStage,
+      cause: unknown,
+      fallback: string,
+      sandboxOrigin?: string,
+    ) => {
+      if (disposed || failed) return
+      failed = true
+      const diagnostic: McpAppDiagnostic = {
+        code,
+        stage,
+        message: safeMcpAppDiagnosticMessage(cause, fallback),
+        toolName: part.toolName,
+        resourceUri: app.resourceUri,
+        ...(sandboxOrigin ? { sandboxOrigin } : {}),
+        elapsedMs: Math.round(performance.now() - startedAt),
+        checkpoints: [...checkpoints],
+        ...(sandboxDocument ? { sandboxDocument } : {}),
+      }
+      console.error(`[OpenWork MCP App] ${code}`, diagnostic)
+      setError(diagnostic)
+    }
+    checkpoint("resource-resolved")
+    const sandbox = openworkServerClient.mcpAppSandbox(app, window.location.origin)
+    if (sandbox.expectedOrigin === window.location.origin) {
+      fail(
+        "MCP_APP_SANDBOX_ORIGIN_INVALID",
+        "sandbox-proxy",
+        null,
+        "The sandbox resolved to the same origin as the OpenWork host.",
+        sandbox.expectedOrigin,
+      )
+      return
+    }
     const bridge = new AppBridge(
       null,
       { name: "OpenWork", version: "1.0.0" },
@@ -131,17 +219,20 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
         },
       },
     )
+    let resourceDeliveryTimer: number | undefined
     let initializeTimer: number | undefined
     let initialized = false
+    let resourceAccepted = false
+    let resourceSendAttempts = 0
     const sandboxReadyTimer = window.setTimeout(() => {
-      if (!disposed) setError("The interactive view sandbox did not finish loading.")
+      fail(
+        "MCP_APP_SANDBOX_PROXY_TIMEOUT",
+        "sandbox-proxy",
+        null,
+        "The sandbox proxy did not report that it was ready within 5 seconds.",
+        sandbox.expectedOrigin,
+      )
     }, SANDBOX_READY_TIMEOUT_MS)
-    const sandbox = openworkServerClient.mcpAppSandbox(app, window.location.origin)
-    if (sandbox.expectedOrigin === window.location.origin) {
-      window.clearTimeout(sandboxReadyTimer)
-      setError("The MCP Apps sandbox must use a different origin from the OpenWork host.")
-      return
-    }
 
     bridge.onsizechange = ({ height: requestedHeight }) => {
       const now = Date.now()
@@ -161,6 +252,8 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
     )
     bridge.oninitialized = () => {
       initialized = true
+      checkpoint("app-initialized")
+      if (resourceDeliveryTimer !== undefined) window.clearTimeout(resourceDeliveryTimer)
       if (initializeTimer !== undefined) window.clearTimeout(initializeTimer)
       void bridge.sendToolInput({
         arguments: isRecord(part.input) ? part.input : {},
@@ -169,40 +262,137 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
         ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
         ...(result._meta ? { _meta: result._meta } : {}),
       })).catch((cause) => {
-        if (!disposed) setError(cause instanceof Error ? cause.message : "The tool result could not be delivered to the view.")
+        fail(
+          "MCP_APP_TOOL_RESULT_DELIVERY_FAILED",
+          "tool-result-delivery",
+          cause,
+          "The tool result could not be delivered to the initialized view.",
+          sandbox.expectedOrigin,
+        )
       })
+    }
+    const startInitializeTimer = () => {
+      if (initialized || initializeTimer !== undefined) return
+      initializeTimer = window.setTimeout(() => {
+        const message = sandboxDocument
+          ? "The HTML document loaded, but the MCP App did not send ui/notifications/initialized within 10 seconds."
+          : "The sandbox accepted the resource, but the MCP App did not complete initialization within 10 seconds."
+        fail(
+          "MCP_APP_INITIALIZE_TIMEOUT",
+          "app-initialization",
+          null,
+          message,
+          sandbox.expectedOrigin,
+        )
+      }, INITIALIZE_TIMEOUT_MS)
+    }
+    const markResourceAccepted = () => {
+      resourceAccepted = true
+      if (resourceDeliveryTimer !== undefined) window.clearTimeout(resourceDeliveryTimer)
+      startInitializeTimer()
+    }
+    const handleSandboxDiagnosticMessage = (event: MessageEvent) => {
+      if (event.source !== iframe.contentWindow
+        || event.origin !== sandbox.expectedOrigin
+        || !isRecord(event.data)) return
+      if (event.data.method === "ui/notifications/sandbox-resource-loaded") {
+        const params = isRecord(event.data.params) ? event.data.params : {}
+        sandboxDocument = {
+          readyState: typeof params.readyState === "string" ? params.readyState : null,
+          hasHtmlRoot: typeof params.hasHtmlRoot === "boolean" ? params.hasHtmlRoot : null,
+          scriptCount: typeof params.scriptCount === "number" ? params.scriptCount : null,
+        }
+        checkpoint("resource-document-loaded")
+        markResourceAccepted()
+        return
+      }
+      if (event.data.method === "ui/notifications/sandbox-resource-accepted") {
+        checkpoint("resource-accepted")
+        markResourceAccepted()
+        return
+      }
+      if (event.data.method === "ui/notifications/sandbox-diagnostic") {
+        const params = isRecord(event.data.params) ? event.data.params : {}
+        const code = typeof params.code === "string" ? params.code : "MCP_APP_SANDBOX_RESOURCE_FAILED"
+        checkpoint("sandbox-diagnostic")
+        fail(
+          code,
+          code === "MCP_APP_DOCUMENT_RUNTIME_ERROR" ? "app-initialization" : "resource-delivery",
+          typeof params.message === "string" ? params.message : null,
+          "The sandbox could not load the MCP App resource.",
+          sandbox.expectedOrigin,
+        )
+      }
     }
     const handleSandboxReady = (event: MessageEvent) => {
       if (event.source !== iframe.contentWindow
         || event.origin !== sandbox.expectedOrigin
-        || event.data?.method !== "ui/notifications/sandbox-proxy-ready") return
+        || !isRecord(event.data)
+        || event.data.method !== "ui/notifications/sandbox-proxy-ready") return
       window.removeEventListener("message", handleSandboxReady)
+      checkpoint("sandbox-proxy-ready")
       window.clearTimeout(sandboxReadyTimer)
       const transport = new PostMessageTransport(iframe.contentWindow!, iframe.contentWindow!)
+      const deliverResource = async () => {
+        resourceSendAttempts += 1
+        try {
+          await bridge.sendSandboxResourceReady({
+            html: secureMcpAppHtml(app),
+            csp: app.csp,
+            sandbox: "allow-scripts allow-same-origin",
+          })
+          checkpoint(resourceSendAttempts === 1 ? "resource-sent" : `resource-resent-${resourceSendAttempts}`)
+          if (resourceAccepted || initialized) return
+          resourceDeliveryTimer = window.setTimeout(() => {
+            if (resourceAccepted || initialized) return
+            if (resourceSendAttempts < MAX_RESOURCE_SEND_ATTEMPTS) {
+              void deliverResource()
+              return
+            }
+            fail(
+              "MCP_APP_RESOURCE_ACCEPT_TIMEOUT",
+              "resource-delivery",
+              null,
+              "The sandbox proxy did not acknowledge the MCP App resource after two delivery attempts.",
+              sandbox.expectedOrigin,
+            )
+          }, RESOURCE_ACCEPT_TIMEOUT_MS)
+        } catch (cause) {
+          fail(
+            "MCP_APP_RESOURCE_DELIVERY_FAILED",
+            "resource-delivery",
+            cause,
+            "The host could not deliver the MCP App HTML to the sandbox.",
+            sandbox.expectedOrigin,
+          )
+        }
+      }
       void bridge.connect(transport)
-        .then(() => bridge.sendSandboxResourceReady({
-          html: secureMcpAppHtml(app),
-          csp: app.csp,
-          sandbox: "allow-scripts allow-same-origin",
-        }))
         .then(() => {
-          if (!initialized) {
-            initializeTimer = window.setTimeout(() => {
-              if (!disposed) setError("The interactive view did not finish its MCP Apps handshake.")
-            }, INITIALIZE_TIMEOUT_MS)
-          }
+          checkpoint("bridge-connected")
+          return deliverResource()
         })
         .catch((cause) => {
-          if (!disposed) setError(cause instanceof Error ? cause.message : "The MCP Apps sandbox could not load the view.")
+          fail(
+            "MCP_APP_RESOURCE_DELIVERY_FAILED",
+            "resource-delivery",
+            cause,
+            "The host could not deliver the MCP App HTML to the sandbox.",
+            sandbox.expectedOrigin,
+          )
         })
     }
+    window.addEventListener("message", handleSandboxDiagnosticMessage)
     window.addEventListener("message", handleSandboxReady)
+    checkpoint("sandbox-navigation-started")
     iframe.src = sandbox.url
 
     return () => {
       disposed = true
+      window.removeEventListener("message", handleSandboxDiagnosticMessage)
       window.removeEventListener("message", handleSandboxReady)
       window.clearTimeout(sandboxReadyTimer)
+      if (resourceDeliveryTimer !== undefined) window.clearTimeout(resourceDeliveryTimer)
       if (initializeTimer !== undefined) window.clearTimeout(initializeTimer)
       void Promise.race([
         bridge.teardownResource({}),
@@ -213,10 +403,28 @@ export function McpAppFrame({ part }: { part: DynamicToolUIPart }) {
 
   if (!result || (!app && !error)) return null
   if (error) {
+    const details = formatMcpAppDiagnostic(error)
     return (
-      <p className="mt-2 text-xs text-muted-foreground" role="status">
-        Interactive view unavailable. The normal tool result is still available. {error}
-      </p>
+      <div className="mt-2 text-xs text-muted-foreground" role="status">
+        <p>Interactive view unavailable. The normal tool result is still available. {error.message}</p>
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none">Technical details ({error.code})</summary>
+          <p className="mt-1">Copy these details when reporting the rendering problem.</p>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 font-mono text-[11px] text-foreground">{details}</pre>
+          <button
+            type="button"
+            className="mt-1 underline underline-offset-2"
+            onClick={() => {
+              if (!navigator.clipboard) return
+              void navigator.clipboard.writeText(details)
+                .then(() => setDetailsCopied(true))
+                .catch(() => setDetailsCopied(false))
+            }}
+          >
+            {detailsCopied ? "Copied" : "Copy details"}
+          </button>
+        </details>
+      </div>
     )
   }
 

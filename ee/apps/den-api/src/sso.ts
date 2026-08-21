@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, isNull } from "@openwork-ee/den-db/drizzle"
 import { AuthAccountTable, ExternalIdentityTable, SsoConnectionTable, SsoProviderTable } from "@openwork-ee/den-db/schema"
 import { createDenTypeId } from "@openwork-ee/utils/typeid"
+import { XMLParser } from "fast-xml-parser"
 import { z } from "zod"
 import { auth } from "./auth.js"
 import { db } from "./db.js"
@@ -9,6 +10,8 @@ import { env } from "./env.js"
 import { isMicrosoftEntraManagedDomain } from "./sso-entra-domain.js"
 import { SSO_IDENTITY_EXTRA_FIELDS } from "./sso-jit.js"
 import { ORGANIZATION_SAML_WANT_ASSERTIONS_SIGNED } from "./sso-saml-policy.js"
+
+const SSO_PROVIDER_PREFIX = env.ssoProviderPrefix ?? "sso"
 
 type SsoConnection = typeof SsoConnectionTable.$inferSelect
 type OrganizationId = SsoConnection["organizationId"]
@@ -52,24 +55,28 @@ const oidcDiscoverySchema = z.object({
   userinfo_endpoint: z.string().url().optional(),
 })
 
-export function buildOrganizationSsoProviderId(organizationId: OrganizationId) {
-  return `openwork-sso-${organizationId}`
+export function buildOrganizationSsoProviderId(organizationId: OrganizationId, customPrefix?: string) {
+  const prefix = customPrefix?.trim() || SSO_PROVIDER_PREFIX
+  return `${prefix}-${organizationId}`
+}
+
+export function getSsoAcsUrl(providerId: string, customDomain?: string | null) {
+  const baseUrl = customDomain?.trim() ? customDomain.replace(/\/+$/, "") : env.betterAuthUrl
+  return `${baseUrl}/api/auth/sso/saml2/sp/acs/${encodeURIComponent(providerId)}`
+}
+
+export function getSsoMetadataUrl(providerId: string, customDomain?: string | null) {
+  const baseUrl = customDomain?.trim() ? customDomain.replace(/\/+$/, "") : env.betterAuthUrl
+  return `${baseUrl}/api/auth/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`
+}
+
+export function getSsoOidcRedirectUrl(providerId: string, customDomain?: string | null) {
+  const baseUrl = customDomain?.trim() ? customDomain.replace(/\/+$/, "") : env.betterAuthUrl
+  return `${baseUrl}/api/auth/sso/callback/${encodeURIComponent(providerId)}`
 }
 
 export function getOrganizationSsoSignInPath(organizationSlug: string) {
   return `/sso/${encodeURIComponent(organizationSlug)}`
-}
-
-export function getSsoAcsUrl(providerId: string) {
-  return `${env.betterAuthUrl}/api/auth/sso/saml2/sp/acs/${encodeURIComponent(providerId)}`
-}
-
-export function getSsoMetadataUrl(providerId: string) {
-  return `${env.betterAuthUrl}/api/auth/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`
-}
-
-export function getSsoOidcRedirectUrl(providerId: string) {
-  return `${env.betterAuthUrl}/api/auth/sso/callback/${encodeURIComponent(providerId)}`
 }
 
 function isDevLoopbackIssuer(issuer: string) {
@@ -433,4 +440,252 @@ export async function hasEnabledOrganizationSsoConnection(organizationId: Organi
 
   const provider = await getSsoProviderForConnection(connection)
   return isOrganizationSsoReady({ connection, providerExists: Boolean(provider) })
+}
+
+const samlMetadataResponseSchema = z.object({
+  entityID: z.string().url().or(z.string()),
+  idpSsoBinding: z.object({
+    redirect: z.string().url().optional(),
+    post: z.string().url().optional(),
+  }),
+  idpSloBinding: z.object({
+    redirect: z.string().url().optional(),
+    post: z.string().url().optional(),
+  }).optional(),
+  certificate: z.string().min(1),
+  wantAuthnRequestsSigned: z.boolean().optional(),
+  nameIdFormat: z.array(z.string()).optional(),
+})
+
+export type ParsedSamlMetadata = z.infer<typeof samlMetadataResponseSchema>
+
+export async function parseSamlMetadataFromUrl(metadataUrl: string): Promise<ParsedSamlMetadata> {
+  const response = await fetch(metadataUrl, {
+    headers: { accept: "application/xml, text/xml, */*" },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fetch SAML metadata from ${metadataUrl} (${response.status})`)
+  }
+  const xmlText = await response.text()
+  return parseSamlMetadataXml(xmlText)
+}
+
+export function parseSamlMetadataXml(xmlText: string): ParsedSamlMetadata {
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: "@_",
+    allowBooleanAttributes: true,
+  })
+  const parsed = parser.parse(xmlText)
+
+  const entityDescriptor = parsed?.["md:EntityDescriptor"]
+  if (!entityDescriptor) {
+    throw new Error("SAML metadata must be an EntityDescriptor document.")
+  }
+
+  const entityID = entityDescriptor["@_entityID"] ?? ""
+
+  const idpSsoDescriptor = entityDescriptor["md:IDPSSODescriptor"] ?? {}
+  const wantAuthnRequestsSigned = idpSsoDescriptor["@_WantAuthnRequestsSigned"] === "true"
+
+  const singleSignOnServices = idpSsoDescriptor["md:SingleSignOnService"]
+  const ssoServices = Array.isArray(singleSignOnServices)
+    ? singleSignOnServices
+    : singleSignOnServices
+      ? [singleSignOnServices]
+      : []
+
+  const idpSsoRedirect = ssoServices.find(
+    (svc: Record<string, unknown>) =>
+      svc["@_Binding"] === "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+  )
+  const idpSsoPost = ssoServices.find(
+    (svc: Record<string, unknown>) =>
+      svc["@_Binding"] === "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+  )
+
+  const singleLogoutServices = idpSsoDescriptor["md:SingleLogoutService"]
+  const sloServices = Array.isArray(singleLogoutServices)
+    ? singleLogoutServices
+    : singleLogoutServices
+      ? [singleLogoutServices]
+      : []
+
+  const idpSloRedirect = sloServices.find(
+    (svc: Record<string, unknown>) =>
+      svc["@_Binding"] === "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+  )
+  const idpSloPost = sloServices.find(
+    (svc: Record<string, unknown>) =>
+      svc["@_Binding"] === "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+  )
+
+  const keyDescriptors = idpSsoDescriptor["md:KeyDescriptor"]
+  const keyDescs = Array.isArray(keyDescriptors)
+    ? keyDescriptors
+    : keyDescriptors
+      ? [keyDescriptors]
+      : []
+
+  const signingKey = keyDescs.find(
+    (kd: Record<string, unknown>) => kd["@_use"] === "signing",
+  )
+  const encryptionKey = keyDescs.find(
+    (kd: Record<string, unknown>) => kd["@_use"] === "encryption",
+  )
+  const fallbackKey = keyDescs[0]
+
+  const certElement =
+    signingKey?.["ds:X509Certificate"] ??
+    encryptionKey?.["ds:X509Certificate"] ??
+    fallbackKey?.["ds:X509Certificate"]
+
+  const nameIdFormats = idpSsoDescriptor["md:NameIDFormat"]
+  const nameIds = Array.isArray(nameIdFormats)
+    ? nameIdFormats.map((f: string) => f?.trim() ?? "").filter(Boolean)
+    : nameIdFormats
+      ? [nameIdFormats]
+      : []
+
+  const result: ParsedSamlMetadata = {
+    entityID,
+    idpSsoBinding: {
+      redirect: idpSsoRedirect?.["@_Location"] as string | undefined,
+      post: idpSsoPost?.["@_Location"] as string | undefined,
+    },
+    idpSloBinding:
+      idpSloRedirect || idpSloPost
+        ? {
+            redirect: idpSloRedirect?.["@_Location"] as string | undefined,
+            post: idpSloPost?.["@_Location"] as string | undefined,
+          }
+        : undefined,
+    certificate: (certElement as string | undefined)?.trim().replace(/\s+/g, "") ?? "",
+    wantAuthnRequestsSigned: wantAuthnRequestsSigned,
+    nameIdFormat: nameIds,
+  }
+
+  if (!result.entityID) throw new Error("SAML metadata is missing the entityID.")
+  if (!result.certificate) throw new Error("SAML metadata is missing an X.509 certificate.")
+  if (!result.idpSsoBinding.redirect && !result.idpSsoBinding.post) {
+    throw new Error("SAML metadata is missing an SSO service URL.")
+  }
+
+  return samlMetadataResponseSchema.parse(result)
+}
+
+const oidcMetadataResponseSchema = z.object({
+  issuer: z.string().url(),
+  authorizationEndpoint: z.string().url(),
+  tokenEndpoint: z.string().url(),
+  jwksUri: z.string().url(),
+  userinfoEndpoint: z.string().url().optional(),
+  scopesSupported: z.array(z.string()).optional(),
+  responseTypesSupported: z.array(z.string()).optional(),
+  grantTypesSupported: z.array(z.string()).optional(),
+  subjectTypesSupported: z.array(z.string()).optional(),
+})
+
+export type ParsedOidcMetadata = z.infer<typeof oidcMetadataResponseSchema>
+
+export async function parseOidcMetadataFromUrl(issuerUrl: string): Promise<ParsedOidcMetadata> {
+  const discoveryUrl = getOidcDiscoveryUrl(issuerUrl)
+  const response = await fetch(discoveryUrl, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!response.ok) {
+    throw new Error(`OIDC discovery failed at ${discoveryUrl} (${response.status})`)
+  }
+  const data = await response.json()
+  return oidcMetadataResponseSchema.parse({
+    issuer: data.issuer,
+    authorizationEndpoint: data.authorization_endpoint,
+    tokenEndpoint: data.token_endpoint,
+    jwksUri: data.jwks_uri,
+    userinfoEndpoint: data.userinfo_endpoint,
+    scopesSupported: data.scopes_supported,
+    responseTypesSupported: data.response_types_supported,
+    grantTypesSupported: data.grant_types_supported,
+    subjectTypesSupported: data.subject_types_supported,
+  })
+}
+
+export async function testSsoConnection(input: {
+  kind: "saml" | "oidc"
+  issuer: string
+  entryPoint?: string
+  cert?: string
+  clientId?: string
+  skipDiscovery?: boolean
+  authorizationEndpoint?: string
+  tokenEndpoint?: string
+  jwksEndpoint?: string
+}) {
+  const errors: string[] = []
+
+  try {
+    if (input.kind === "saml") {
+      if (input.entryPoint) {
+        const response = await fetch(input.entryPoint, {
+          method: "GET",
+          signal: AbortSignal.timeout(10_000),
+        })
+        if (!response.ok && response.status !== 405) {
+          errors.push(`SAML entry point returned HTTP ${response.status}`)
+        }
+      }
+      if (!input.cert) {
+        errors.push("SAML certificate is required for testing.")
+      }
+    } else {
+      if (input.skipDiscovery && input.authorizationEndpoint) {
+        const response = await fetch(input.authorizationEndpoint, {
+          method: "GET",
+          signal: AbortSignal.timeout(10_000),
+        })
+        if (!response.ok) {
+          errors.push(`OIDC authorization endpoint returned HTTP ${response.status}`)
+        }
+      } else {
+        const parsed = await parseOidcMetadataFromUrl(input.issuer)
+        if (!parsed) {
+          errors.push("OIDC discovery returned invalid metadata.")
+        }
+      }
+    }
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : "Connection test failed.")
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+export async function getOrganizationSsoCustomDomain(organizationId: OrganizationId) {
+  const connection = await getOrganizationSsoConnection(organizationId)
+  if (!connection) return null
+  const provider = await getSsoProviderForConnection(connection)
+  return provider?.customDomain ?? null
+}
+
+export async function updateOrganizationSsoCustomDomain(
+  organizationId: OrganizationId,
+  customDomain: string | null,
+) {
+  const connection = await getOrganizationSsoConnection(organizationId)
+  if (!connection) return null
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(SsoProviderTable)
+      .set({ customDomain })
+      .where(eq(SsoProviderTable.providerId, connection.providerId))
+  })
+
+  return getSsoProviderForConnection(connection)
 }

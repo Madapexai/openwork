@@ -112,6 +112,14 @@
   --dls-radius-lg: 24px;
   --dls-shell-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   --dls-card-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  --glass-blur: 20px;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-strong: rgba(255, 255, 255, 0.85);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.45);
+  --glass-border: rgba(255, 255, 255, 0.4);
+  --glass-border-strong: rgba(255, 255, 255, 0.55);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12);
   --background: var(--slate-1);
   --foreground: var(--slate-12);
   --card: var(--slate-1);
@@ -168,17 +176,28 @@
   --dls-active: var(--slate-5);
   --dls-shell-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
   --dls-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+  --glass-blur: 20px;
+  --glass-bg: rgba(17, 24, 39, 0.55);
+  --glass-bg-strong: rgba(17, 24, 39, 0.72);
+  --glass-bg-subtle: rgba(17, 24, 39, 0.35);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-strong: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
 html,
 body {
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 #root {
   height: 100%;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 html {
@@ -246,10 +265,77 @@ body {
 }
 
 .ow-soft-shell {
-  border: 1px solid var(--dls-border);
-  background: var(--dls-surface);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border-radius: 2rem;
-  box-shadow: var(--dls-shell-shadow);
+  box-shadow: var(--glass-shadow-lg);
+}
+
+.ow-soft-card {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.75)) saturate(160%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.75)) saturate(160%);
+  border-radius: 1.5rem;
+  box-shadow: var(--glass-shadow);
+}
+
+.ow-soft-card-quiet {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-subtle);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.5));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5));
+  border-radius: 1.5rem;
+}
+
+.ow-glass-panel {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  box-shadow: var(--glass-shadow);
+}
+
+.ow-glass-panel-strong {
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.2)) saturate(200%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.2)) saturate(200%);
+  box-shadow: var(--glass-shadow-lg);
+}
+
+.ow-glass-sidebar {
+  border-right: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+
+.ow-ambient-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ow-ambient-bg::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(168, 85, 247, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 55%);
+}
+
+[data-theme="dark"] .ow-ambient-bg::before {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.18) 0%, transparent 50%),
+    radial-gradient(circle at 85% 15%, rgba(168, 85, 247, 0.14) 0%, transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(59, 130, 246, 0.12) 0%, transparent 55%);
 }
 
 /* Arc-style overflow: long labels fade out instead of showing an ellipsis. */
@@ -267,19 +353,6 @@ body {
 
 .ow-session-title-moving > span {
   will-change: transform;
-}
-
-.ow-soft-card {
-  border: 1px solid var(--dls-border);
-  background: var(--dls-surface);
-  border-radius: 1.5rem;
-  box-shadow: var(--dls-card-shadow);
-}
-
-.ow-soft-card-quiet {
-  border: 1px solid var(--dls-border);
-  background: var(--dls-sidebar);
-  border-radius: 1.5rem;
 }
 
 .ow-button-primary {
@@ -553,38 +626,38 @@ select:disabled {
 
 .dark,
 [data-theme="dark"] {
-  --background: var(--slate-1);
+  --background: #0a0a0f;
   --foreground: var(--slate-12);
-  --card: var(--slate-2);
+  --card: rgba(17, 24, 39, 0.72);
   --card-foreground: var(--slate-12);
-  --popover: var(--slate-2);
+  --popover: rgba(17, 24, 39, 0.85);
   --popover-foreground: var(--slate-12);
-  --popover-border: var(--slate-5);
+  --popover-border: rgba(255, 255, 255, 0.08);
   --primary: var(--blue-10);
   --primary-foreground: var(--slate-12);
-  --secondary: var(--slate-3);
+  --secondary: rgba(255, 255, 255, 0.05);
   --secondary-foreground: var(--slate-12);
-  --muted: var(--slate-3);
+  --muted: rgba(255, 255, 255, 0.06);
   --muted-foreground: var(--slate-10);
-  --accent: var(--slate-3);
+  --accent: rgba(255, 255, 255, 0.08);
   --accent-foreground: var(--slate-12);
   --destructive: var(--red-9);
   --warning: var(--amber-11);
-  --border: var(--slate-3);
-  --input: var(--slate-6);
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.1);
   --ring: var(--slate-8);
   --chart-1: var(--sky-9);
   --chart-2: var(--blue-9);
   --chart-3: var(--indigo-9);
   --chart-4: var(--violet-9);
   --chart-5: var(--purple-9);
-  --sidebar: var(--slate-2);
+  --sidebar: rgba(17, 24, 39, 0.72);
   --sidebar-foreground: var(--slate-12);
   --sidebar-primary: var(--blue-9);
   --sidebar-primary-foreground: var(--slate-12);
-  --sidebar-accent: var(--slate-3);
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
   --sidebar-accent-foreground: var(--slate-12);
-  --sidebar-border: var(--slate-6);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-ring: var(--slate-8);
 }
 
@@ -638,10 +711,19 @@ select:disabled {
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground;
-  }
   html {
     @apply font-sans;
+    height: 100%;
+    height: 100dvh;
+  }
+  body {
+    @apply bg-background text-foreground;
+    min-height: 100%;
+    min-height: 100dvh;
+    overscroll-behavior: none;
+  }
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
   }
 }

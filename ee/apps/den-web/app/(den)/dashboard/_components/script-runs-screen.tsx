@@ -75,16 +75,16 @@ export function ScriptRunsScreen() {
   return (
     <DashboardPageTemplate
       icon={ScrollText}
-      title="Script runs"
-      description="Review recent Code Mode script activity and the capabilities each run called."
+      title="Workflow Runs"
+      description="Review recent workflow runs and the capabilities each run called."
       colors={["#EEF2FF", "#6366F1", "#C7D2FE", "#A5B4FC"]}
     >
       {error ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700">{error}</div> : null}
       <DenCard className="!p-0">
         {loading ? (
-          <p className="px-6 py-5 text-[13px] text-gray-500">Loading script runs...</p>
+          <p className="px-6 py-5 text-[13px] text-gray-500">Loading workflow runs...</p>
         ) : (
-          <DenTable columns={columns} rows={runs} getRowKey={(run) => run.id} emptyLabel="No script runs yet." />
+          <DenTable columns={columns} rows={runs} getRowKey={(run) => run.id} emptyLabel="No workflow runs yet." />
         )}
       </DenCard>
     </DashboardPageTemplate>

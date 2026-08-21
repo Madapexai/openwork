@@ -330,6 +330,10 @@ export type SessionSurfaceProps = {
   onModelVariantChange: (value: string | null) => void;
   agentLabel: string;
   selectedAgent: string | null;
+  /** True when selectedAgent is an injected CLI agent (source === "openwork"). */
+  agentIsCli?: boolean;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: import("@/app/types").ModelRef | null;
   listAgents: () => Promise<import("@opencode-ai/sdk/v2/client").Agent[]>;
   onSelectAgent: (agent: string | null) => void;
   listCommands: () => Promise<import("@/app/types").SlashCommandOption[]>;
@@ -791,6 +795,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
       return item;
     },
     staleTime: 500,
+    // CLI agent 会话没有 opencode SSE 事件流，session-sync 不会推送增量，
+    // 必须轮询 snapshot 才能看到流式输出与最终状态。busy 期间 800ms 拉一次，
+    // idle（终态已落地）后停止。
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data || data.session.id !== props.sessionId) return false;
+      const cli = (data.session.metadata as { cli?: boolean } | undefined)?.cli === true;
+      return cli && data.status.type === "busy" ? 800 : false;
+    },
   });
 
   const currentSnapshot = snapshotQuery.data?.session.id === props.sessionId ? snapshotQuery.data : null;
@@ -1979,7 +1992,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onScroll={sessionScroll.handleScroll}
           // Extra top padding while the find bar is open so it never covers
           // the first message (short transcripts cannot scroll it clear).
-          className={`absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pb-4 sm:px-5 ${findOwned ? "pt-16" : "pt-4"}`}
+          className={`absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-3 pb-4 sm:px-5 ${findOwned ? "pt-16" : "pt-4"}`}
         >
           {/* Chat column: tighter than the composer (800px) so messages
                keep a comfortable reading width and don't feel "too big". */}
@@ -2154,6 +2167,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
         onModelVariantChange={sessionModel.setVariant}
         agentLabel={props.agentLabel}
         selectedAgent={props.selectedAgent}
+        agentIsCli={props.agentIsCli}
+        agentDefaultModel={props.agentDefaultModel}
         listAgents={props.listAgents}
         onSelectAgent={props.onSelectAgent}
         listCommands={props.listCommands}

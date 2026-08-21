@@ -9,16 +9,19 @@
     ".": {
       "types": "./src/index.ts",
       "development": "./src/index.ts",
+      "import": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./typeid": {
       "types": "./src/typeid.ts",
       "development": "./src/typeid.ts",
+      "import": "./src/typeid.ts",
       "default": "./dist/typeid.js"
     },
     "./observability": {
       "types": "./src/observability.ts",
       "development": "./src/observability.ts",
+      "import": "./src/observability.ts",
       "default": "./dist/observability.js"
     }
   },

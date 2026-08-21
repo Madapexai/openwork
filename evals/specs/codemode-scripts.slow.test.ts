@@ -655,9 +655,9 @@ return { drive, gmail }`,
   });
   await evalIn(browser, `localStorage.setItem("openwork:web:auth-token", ${JSON.stringify(den.admin.token)})`);
   await navigate(browser.client, `${den.ref.webUrl}/dashboard/script-runs`);
-  await waitFor(browser, `document.body.innerText.includes("Script runs") || document.body.innerText.includes("script runs")`, {
+  await waitFor(browser, `document.body.innerText.includes("Workflow Runs") || document.body.innerText.includes("workflow runs")`, {
     timeoutMs: 60_000,
-    label: "Script runs dashboard",
+    label: "Workflow Runs dashboard",
   });
   const runsShot = await screenshot(browser);
   const runsSeen = await validateWithRetry(runsShot, [

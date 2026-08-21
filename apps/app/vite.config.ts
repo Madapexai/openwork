@@ -99,6 +99,14 @@ const migrationReleaseEnv = loadMigrationReleaseEnv();
 // work there. Gate on an env var the electron build script sets.
 const isElectronPackagedBuild = process.env.OPENWORK_ELECTRON_BUILD === "1";
 
+// Headless-web dev (scripts/dev-headless-web.ts): serve /api/den same-origin
+// from the dev server, proxied to the Den control plane, so the browser never
+// issues cross-origin Den API calls (Den does not serve CORS). The app is
+// pointed here via VITE_DEN_API_BASE_URL; sign-in still opens the real Den
+// web app. Inert unless the launcher sets the target env. No gateway marker:
+// that runtime implies a provisioned cloud instance, which local dev lacks.
+const headlessDenTarget = (process.env.OPENWORK_DEV_HEADLESS_DEN_TARGET ?? "").trim();
+
 export default defineConfig({
   base: isElectronPackagedBuild ? "./" : "/",
   define: {
@@ -132,6 +140,13 @@ export default defineConfig({
     port: devPort,
     strictPort: true,
     ...(allowedHosts.size > 0 ? { allowedHosts: Array.from(allowedHosts) } : {}),
+    ...(headlessDenTarget
+      ? {
+          proxy: {
+            "/api/den": { target: headlessDenTarget, changeOrigin: true },
+          },
+        }
+      : {}),
   },
   build: {
     target: "esnext",

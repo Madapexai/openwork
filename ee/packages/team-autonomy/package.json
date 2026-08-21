@@ -1,0 +1,72 @@
+{
+  "name": "@openwork-ee/team-autonomy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Team Autonomy plugin package for OpenWork — multi-agent team governance, task decomposition, artifact management, and skill validation. Minimal intrusion into OpenWork core via 3 adapter seams.",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "source": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./db": {
+      "types": "./src/db/index.ts",
+      "development": "./src/db/index.ts",
+      "import": "./src/db/index.ts",
+      "default": "./dist/db/index.js"
+    },
+    "./db/schema": {
+      "types": "./src/db/schema.ts",
+      "development": "./src/db/schema.ts",
+      "import": "./src/db/schema.ts",
+      "default": "./dist/db/schema.js"
+    },
+    "./routes": {
+      "types": "./src/http/routes.ts",
+      "development": "./src/http/routes.ts",
+      "import": "./src/http/routes.ts",
+      "default": "./dist/http/routes.js"
+    },
+    "./auth-hook": {
+      "types": "./src/auth/hook.ts",
+      "development": "./src/auth/hook.ts",
+      "import": "./src/auth/hook.ts",
+      "default": "./dist/auth/hook.js"
+    },
+    "./ui/manifest": {
+      "types": "./src/ui/manifest.ts",
+      "development": "./src/ui/manifest.ts",
+      "import": "./src/ui/manifest.ts",
+      "default": "./dist/ui/manifest.js"
+    },
+    "./services": {
+      "types": "./src/services/_services-barrel.ts",
+      "development": "./src/services/_services-barrel.ts",
+      "import": "./src/services/_services-barrel.ts",
+      "default": "./dist/services/_services-barrel.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@openwork-ee/den-db": "workspace:*",
+    "@openwork-ee/utils": "workspace:*",
+    "drizzle-orm": "^0.41.0",
+    "hono": "^4.12.34"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  }
+}

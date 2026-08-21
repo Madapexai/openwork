@@ -442,6 +442,9 @@ export function electronSurfaceEnv(paths: ElectronProfilePaths, options: Electro
     APPDATA: paths.appDataDir,
     HOME: paths.homeDir,
     LOCALAPPDATA: paths.localAppDataDir,
+    // Exclusive bundle-scan root: keeps org download bundles in the user's real
+    // ~/Downloads (macOS resolves it outside HOME) out of fresh eval profiles.
+    OPENWORK_BOOTSTRAP_BUNDLE_DIR: join(paths.root, "bootstrap-bundle"),
     OPENWORK_DATA_DIR: paths.dataDir,
     OPENWORK_DESKTOP_BOOTSTRAP_PATH: paths.bootstrapPath,
     OPENWORK_DESKTOP_DISABLE_WORKSPACE_RECOVERY: "1",

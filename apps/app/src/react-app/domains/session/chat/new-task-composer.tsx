@@ -47,6 +47,10 @@ export type NewTaskComposerContext = {
   onModelVariantChange: (value: string | null) => void;
   agentLabel: string;
   selectedAgent: string | null;
+  /** True when selectedAgent is an injected CLI agent (source === "openwork"). */
+  agentIsCli?: boolean;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
   listAgents: () => Promise<Agent[]>;
   onSelectAgent: (agent: string | null) => void;
   listCommands: () => Promise<SlashCommandOption[]>;
@@ -271,6 +275,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       onModelVariantChange={context?.onModelVariantChange ?? noop}
       agentLabel={context?.agentLabel ?? t("session.default_agent")}
       selectedAgent={context?.selectedAgent ?? null}
+      agentIsCli={context?.agentIsCli}
+      agentDefaultModel={context?.agentDefaultModel}
       listAgents={context?.listAgents ?? emptyAgents}
       onSelectAgent={context?.onSelectAgent ?? noop}
       listCommands={context?.listCommands ?? emptyCommands}

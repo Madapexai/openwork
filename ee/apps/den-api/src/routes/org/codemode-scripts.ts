@@ -52,7 +52,7 @@ const saveSchema = z.object({
   code: z.string().min(1).max(200_000),
   currentInput: z.unknown().optional(),
   inputSchema: z.unknown().optional(),
-  outputSchema: z.unknown().optional(),
+  outputSchema: z.unknown().optional().describe("JSON Schema for the returned value. Include this when the Script will back a custom Artifact view."),
 })
 const savedSchema = z.object({ pluginId: z.string(), configObjectId: z.string(), configObjectVersionId: z.string() })
 const runParamsSchema = z.object({ configObjectId: z.string().min(1).max(160) })
@@ -85,11 +85,13 @@ const draftSchema = z.object({
   code: z.string().min(1).max(200_000),
   exampleInput: z.unknown().optional(),
   inputSchema: z.unknown().optional(),
-  outputSchema: z.unknown().optional(),
+  outputSchema: z.unknown().optional().describe("Explicit JSON Schema for the returned value. It must be present before this Script can back a custom Artifact view."),
   requiredCapabilities: z.array(savedScriptCapabilitySchema).max(100),
 })
 const testSchema = draftSchema.extend({ configObjectId: z.string().min(1).max(160) })
-const versionSchema = draftSchema.extend({ receiptId: z.string().min(1).max(160) })
+const versionSchema = draftSchema.extend({
+  receiptId: z.string().min(1).max(160).describe("Copy receiptId from the immediately preceding successful draft test. Submit the exact same name, description, code, exampleInput, inputSchema, outputSchema, and requiredCapabilities used by that test."),
+})
 const versionsResponseSchema = z.object({ items: z.array(savedScriptVersionSchema) })
 const snapshotsResponseSchema = z.object({ items: z.array(savedScriptArtifactSnapshotSchema) })
 
@@ -99,6 +101,24 @@ function routeFailure(error: unknown) {
   }
   const message = error instanceof Error ? error.message : "Saved Script request failed."
   if (message.includes("not_found")) return { status: 404, body: { error: "saved_script_not_found", message } } as const
+  if (message === "saved_script_matching_test_receipt_required") {
+    return {
+      status: 400,
+      body: {
+        error: message,
+        message: "Test the draft first, then immediately create the version using that successful test's receiptId and the exact unchanged name, description, code, exampleInput, inputSchema, outputSchema, and requiredCapabilities. Do not reuse an older receipt or alter any draft field between the two calls.",
+      },
+    } as const
+  }
+  if (message === "saved_script_recent_receipt_required") {
+    return {
+      status: 400,
+      body: {
+        error: message,
+        message: "Run the exact Script code successfully with execute_capability_script, then retry saving the Script without changing the code. The successful run must be less than 15 minutes old.",
+      },
+    } as const
+  }
   return { status: 400, body: { error: "saved_script_rejected", message } } as const
 }
 
@@ -154,7 +174,7 @@ export function registerOrgCodemodeScriptRoutes<T extends { Variables: OrgRouteV
   app.post(
     "/v1/codemode-scripts",
     describeRoute({
-      tags: ["Codemode Runs"], summary: "Save a successful Code Mode run as a reusable script",
+      tags: ["Codemode Runs"], summary: "Save a successful Code Mode run as a reusable script; include outputSchema when it will back an Artifact view",
       responses: { 201: jsonResponse("Script saved.", savedSchema), 400: jsonResponse("Invalid request.", invalidRequestSchema) },
     }),
     orgMemberRoute(), jsonValidator(saveSchema),
@@ -281,7 +301,7 @@ export function registerOrgCodemodeScriptRoutes<T extends { Variables: OrgRouteV
   app.post(
     "/v1/codemode-scripts/test",
     describeRoute({
-      tags: ["Codemode Runs"], summary: "Test a saved Script draft before creating a version",
+      tags: ["Codemode Runs"], summary: "Test the exact saved Script draft and return the receiptId required to create that unchanged version",
       responses: { 200: jsonResponse("Script draft tested.", savedScriptTestResultSchema), 400: jsonResponse("Test rejected.", invalidRequestSchema) },
     }),
     orgMemberRoute(), jsonValidator(testSchema),
@@ -315,7 +335,7 @@ export function registerOrgCodemodeScriptRoutes<T extends { Variables: OrgRouteV
   app.post(
     "/v1/codemode-scripts/:configObjectId/versions",
     describeRoute({
-      tags: ["Codemode Runs"], summary: "Create an immutable saved Script version from a matching test receipt",
+      tags: ["Codemode Runs"], summary: "Create an immutable saved Script version using the immediately preceding matching test receipt and unchanged draft",
       responses: { 201: jsonResponse("Script version created.", savedScriptDetailSchema), 400: jsonResponse("Version rejected.", invalidRequestSchema) },
     }),
     orgMemberRoute(), jsonValidator(versionSchema),

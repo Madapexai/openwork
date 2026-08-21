@@ -80,17 +80,23 @@ describe("cloud super-admin role hierarchy", () => {
     expect(canRefreshInvitationRole("qa-reviewer", superAdmin)).toBe(true);
   });
 
-  test("exposes exact admin sidebar destinations for Extensions, Models, Members, Analytics, and Settings", () => {
+  test("exposes exact admin sidebar destinations for Manage, Observability, and Team", () => {
     const shell = read("../app/(den)/dashboard/_components/org-dashboard-shell.tsx");
 
-    for (const label of ["Extensions", "Marketplace", "Sources", "Plugins", "Connectors", "Models", "OpenWork Models", "Bring your Own Keys", "Members", "Analytics", "Settings"]) {
+    for (const label of ["Marketplace", "Plugin Directory", "Connectors", "Sources", "Models", "OpenWork Models", "Bring your Own Keys", "Workflow Runs", "Analytics", "Members", "Settings"]) {
       expect(shell).toContain(`label: "${label}"`);
     }
 
-    for (const label of ["General", "Diagnostics", "Brand appearance", "Desktop Policies", "Billing", "API Keys", "SSO", "SCIM"]) {
+    for (const label of ["General", "Diagnostics", "Brand appearance", "Desktop Policies", "Billing", "API Keys", "SSO", "SCIM", "Tool Tester"]) {
       expect(shell).toContain(`label: "${label}"`);
     }
 
+    expect(shell).toContain('label: "Work"');
+    expect(shell).toContain('label: "Manage"');
+    expect(shell).toContain('label: "Observability"');
+    expect(shell).toContain('label: "Team"');
+    expect(shell).not.toContain('label: "Extensions"');
+    expect(shell).not.toContain('label: "Your Connections"');
     expect(shell).toContain("access.canViewSettings");
     expect(shell).toContain("access.isAdmin && activeOrg");
   });

@@ -96,6 +96,10 @@ type ComposerProps = {
   onModelVariantChange: (value: string | null) => void;
   agentLabel: string;
   selectedAgent: string | null;
+  /** True when selectedAgent is an injected CLI agent (source === "openwork"). */
+  agentIsCli?: boolean;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
   listAgents: () => Promise<Agent[]>;
   onSelectAgent: (agent: string | null) => void;
   listCommands: () => Promise<SlashCommandOption[]>;
@@ -1192,7 +1196,7 @@ export function ReactSessionComposer(props: ComposerProps) {
   return (
     <div
       ref={rootRef}
-      className={props.flush ? `relative ${toolMenuOpen ? "z-50" : "z-20"}` : `sticky bottom-0 ${toolMenuOpen ? "z-50" : "z-20"} bg-gradient-to-t from-dls-surface via-dls-surface/95 to-transparent px-4 pb-2 md:px-8 ${props.compactTopSpacing ? "pt-0" : "pt-1"}`}
+      className={props.flush ? `relative ${toolMenuOpen ? "z-50" : "z-20"}` : `sticky bottom-0 ${toolMenuOpen ? "z-50" : "z-20"} bg-gradient-to-t from-dls-surface via-dls-surface/95 to-transparent px-4 pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))] max-lg:px-3 lg:px-8 ${props.compactTopSpacing ? "pt-0" : "pt-1"}`}
       style={{ contain: "layout style" }}
       onKeyDownCapture={handleKeyDownCapture}
       onCompositionStart={() => {
@@ -1324,7 +1328,7 @@ export function ReactSessionComposer(props: ComposerProps) {
             />
 
             {/* Action row — attachments, quick actions, model controls, and send */}
-            <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
+            <div className="mt-2 flex flex-wrap items-end justify-between gap-2 max-lg:gap-y-3">
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                 <input
                   ref={(element) => {
@@ -1341,7 +1345,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                 />
                 <button
                   type="button"
-                  className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 ${
+                  className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 max-lg:h-11 max-lg:max-h-11 max-lg:w-11 ${
                     !props.attachmentsEnabled ? "cursor-not-allowed opacity-60" : ""
                   }`}
                   onClick={() => {
@@ -1363,7 +1367,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                 >
                   <button
                     type="button"
-                    className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md transition-colors ${toolMenuOpen ? "bg-gray-3 text-gray-12" : "text-gray-10 hover:bg-gray-3"}`}
+                    className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md transition-colors max-lg:h-11 max-lg:max-h-11 max-lg:w-11 ${toolMenuOpen ? "bg-gray-3 text-gray-12" : "text-gray-10 hover:bg-gray-3"}`}
                     onClick={() => {
                       setMentionOpen(false);
                       setMentionItems([]);
@@ -1702,6 +1706,8 @@ export function ReactSessionComposer(props: ComposerProps) {
                   }}
                   disabled={props.steering}
                   sessionId={props.sessionId}
+                  agentId={props.agentIsCli ? props.selectedAgent : null}
+                  agentDefaultModel={props.agentDefaultModel}
                   openWorkModelsEntitled={props.openWorkModelsEntitled}
                   openWorkModelsSyncing={props.openWorkModelsSyncing}
                   fallbackOptions={props.modelOptions}
@@ -1750,18 +1756,18 @@ export function ReactSessionComposer(props: ComposerProps) {
                   on the chevron shows how many messages are queued.
                   Escape arms a "Hit Escape again to stop the agent" prompt.
               */}
-              <div className="ml-auto flex shrink-0 items-end gap-1.5">
+              <div className="ml-auto flex shrink-0 items-end gap-1.5 max-lg:w-full max-lg:justify-end">
                 {props.busy ? (
                   <>
                     {escapeArmed ? (
-                      <span className="self-center pr-1 text-[12px] font-medium text-gray-10">
+                      <span className="self-center pr-1 text-[12px] font-medium text-gray-10 max-lg:hidden">
                         {t("composer.escape_to_stop")}
                       </span>
                     ) : null}
                     <button
                       type="button"
                       onClick={props.onStop}
-                      className="mr-2 inline-flex h-9 max-h-9 items-center gap-2 rounded-full border border-dls-border bg-transparent px-4 text-[13px] font-medium text-gray-11 transition-colors hover:bg-gray-3"
+                      className="mr-2 inline-flex h-9 max-h-9 items-center gap-2 rounded-full border border-dls-border bg-transparent px-4 text-[13px] font-medium text-gray-11 transition-colors hover:bg-gray-3 max-lg:h-11 max-lg:max-h-11"
                       title={t("composer.stop")}
                     >
                       <Square size={12} fill="currentColor" />
@@ -1772,7 +1778,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                         type="button"
                         onClick={canSend ? props.onSteer : undefined}
                         disabled={!canSend}
-                        className={`inline-flex h-9 max-h-9 items-center gap-2 rounded-l-full pl-4 pr-3 text-[13px] font-medium transition-colors ${
+                        className={`inline-flex h-9 max-h-9 items-center gap-2 rounded-l-full pl-4 pr-3 text-[13px] font-medium transition-colors max-lg:h-11 max-lg:max-h-11 ${
                           canSend
                             ? "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
                             : "bg-gray-4 text-gray-10"
@@ -1788,7 +1794,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                             <button
                               type="button"
                               aria-label={t("composer.send_options")}
-                              className={`relative inline-flex h-9 max-h-9 items-center rounded-r-full border-l pl-1.5 pr-2.5 transition-colors ${
+                              className={`relative inline-flex h-9 max-h-9 items-center rounded-r-full border-l pl-1.5 pr-2.5 transition-colors max-lg:h-11 max-lg:max-h-11 ${
                                 canSend
                                   ? "border-[color-mix(in_srgb,var(--dls-accent-fg)_25%,transparent)] bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
                                   : "border-gray-6 bg-gray-4 text-gray-10"
@@ -1826,7 +1832,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                     type="button"
                     onClick={canSend && !props.submissionPreparing ? props.onSend : undefined}
                     disabled={props.disabled || !canSend || props.submissionPreparing}
-                    className={`inline-flex h-9 max-h-9 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition-colors ${
+                    className={`inline-flex h-9 max-h-9 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition-colors max-lg:h-11 max-lg:max-h-11 ${
                       !canSend || props.disabled || props.submissionPreparing
                         ? "bg-gray-4 text-gray-10"
                         : "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"

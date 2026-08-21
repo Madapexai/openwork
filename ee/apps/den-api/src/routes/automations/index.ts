@@ -133,7 +133,7 @@ export function registerAutomationRoutes<T extends { Variables: RouteVariables }
           capabilities: registration.capabilities,
         },
         automationRunnerAudienceFromRequest(c.req.raw, {
-          trustedOrigins: env.publicUrlTrustedOrigins,
+          trustedOrigins: env.publicProxyTrustedOrigins,
         }),
       ))
     },

@@ -1,4 +1,9 @@
 import * as crypto from "node:crypto";
+// L3 plugin adapter seam — Team Autonomy auth hook:
+//   The SAFE variant below is the one we call inside session.create so a
+//   plugin failure never blocks sign-in. Impl runs iff
+//   TEAM_AUTONOMY_ENABLED=1 and activeOrganizationId is non-null.
+import { ensurePersonalTeamForUserSafe } from "@openwork-ee/team-autonomy/auth-hook";
 import { getInitialActiveOrganizationIdForUser } from "./active-organization.js";
 import { db } from "./db.js";
 import { env } from "./env.js";
@@ -614,6 +619,22 @@ export const auth = betterAuth({
         before: async (session) => {
           const userId = normalizeDenTypeId("user", session.userId);
           const activeOrganizationId = await getInitialActiveOrganizationIdForUser(userId);
+          // L3 plugin seam: Team Autonomy personal-team auto-create.
+          //   Delegates to the plugin's SAFE variant which:
+          //     1. short-circuits if TEAM_AUTONOMY_ENABLED is off,
+          //     2. skips when activeOrganizationId is null,
+          //     3. NEVER throws — plugin failures become logs.
+          //   So this single, stable ~5 line block replaces the old try/catch.
+          await ensurePersonalTeamForUserSafe(
+            userId as unknown as string,
+            activeOrganizationId as unknown as string | null,
+            // Logger shape compatibility: den-api's AppLogger.info/warn/error
+            // accept (string, fields?) — the plugin's NoThrowLogger accepts
+            // (msg, extra?). We widen with `as unknown as` because at the
+            // call site it's the same two-arg logger, just with stricter TS
+            // typing on the plugin side.
+            { logger: logger as unknown as { warn: (m: string, e?: unknown) => void; error: (m: string, e?: unknown) => void } },
+          );
           try {
             // SSO JIT creates the raw member row before the session row, so this
             // chokepoint can merge any matching pending invitation without blocking sign-in.

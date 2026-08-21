@@ -1,6 +1,21 @@
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { ApiError } from "../errors.js";
-import { buildSession, buildSessionList, buildSessionMessages, buildSessionSnapshot } from "../session-read-model.js";
+import {
+  buildSession,
+  buildSessionList,
+  buildSessionMessages,
+  buildSessionSnapshot,
+} from "../session-read-model.js";
+import {
+  abortCliSession,
+  buildCliSessionInfo,
+  buildCliSessionMessages,
+  buildCliSessionSnapshot,
+  deleteCliSession,
+  getCliSessionRecord,
+  listCliSessions,
+  isCliSession,
+} from "../cli-agent-session.js";
 import {
   createSessionGroupId,
   normalizeSessionGroupState,
@@ -85,19 +100,39 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     workspace: WorkspaceInfo,
     input: { roots?: boolean; start?: number; search?: string; limit?: number },
   ) {
+    // CLI agent 会话只存在于内存 store，opencode 列表不包含它们。
+    // 有 CLI 会话时改为全量拉取 opencode 列表后合并，统一按 updated 倒序
+    // 再应用 search/start/limit，保证两种会话在列表中交错排序正确。
+    const cliRecords = listCliSessions(workspace.id);
     try {
       const opencode = createWorkspaceOpencodeClient(config, workspace);
-      return buildSessionList(
+      const items = buildSessionList(
         unwrapOpencodeResult(
-          await opencode.session.list({
-            roots: input.roots,
-            start: input.start,
-            search: input.search,
-            limit: input.limit,
-          }),
+          await opencode.session.list(
+            cliRecords.length > 0
+              ? { roots: input.roots }
+              : {
+                  roots: input.roots,
+                  start: input.start,
+                  search: input.search,
+                  limit: input.limit,
+                },
+          ),
           "/session",
         ),
       );
+      if (cliRecords.length === 0) return items;
+
+      const search = input.search?.trim().toLowerCase();
+      const merged = [...items, ...cliRecords.map((record) => buildCliSessionInfo(record))]
+        .filter((session) => {
+          if (!search) return true;
+          return (session.title ?? "").toLowerCase().includes(search) || session.id.toLowerCase().includes(search);
+        })
+        .sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0));
+      const start = input.start ?? 0;
+      const sliced = typeof input.limit === "number" && input.limit > 0 ? merged.slice(start, start + input.limit) : merged.slice(start);
+      return sliced;
     } catch (error) {
       remapSessionReadError(error);
     }
@@ -137,6 +172,13 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
   }
 
   async function readWorkspaceSession(workspace: WorkspaceInfo, sessionId: string) {
+    // CLI agent sessions live in the cli-agent-session store, not opencode.
+    // Serve them from there so the UI transcript renders (opencode doesn't
+    // know these agents and would return null/empty).
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      if (record) return buildCliSessionInfo(record);
+    }
     try {
       const opencode = createWorkspaceOpencodeClient(config, workspace);
       return buildSession(
@@ -155,6 +197,10 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     sessionId: string,
     input: { limit?: number },
   ) {
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      if (record) return buildCliSessionMessages(record, input.limit);
+    }
     try {
       const opencode = createWorkspaceOpencodeClient(config, workspace);
       return buildSessionMessages(
@@ -173,6 +219,10 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     sessionId: string,
     input: { limit?: number },
   ) {
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      if (record) return buildCliSessionSnapshot(record, input.limit);
+    }
     try {
       const opencode = createWorkspaceOpencodeClient(config, workspace);
       const [session, messages, todos, statuses] = await Promise.all([
@@ -251,6 +301,11 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const sessionId = ctx.params.sessionId?.trim();
     if (!sessionId) throw new ApiError(400, "invalid_payload", "sessionId is required");
+    // CLI agent 会话：opencode 引擎不认识该会话，直接中止内存 store 中的运行
+    if (isCliSession(workspace.id, sessionId)) {
+      abortCliSession(workspace.id, sessionId);
+      return jsonResponse({ ok: true });
+    }
     const result = await createWorkspaceOpencodeClient(config, workspace, { sessionId }).session.abort({ sessionID: sessionId });
     if (result.error !== undefined) {
       throw new ApiError(502, "opencode_request_failed", "OpenCode abort failed");
@@ -445,6 +500,14 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const sessionId = (ctx.params.sessionId ?? "").trim();
     if (!sessionId) {
       throw new ApiError(400, "invalid_payload", "sessionId is required");
+    }
+
+    // CLI agent 会话只存在于内存 store（opencode 引擎不认识），
+    // 先中止运行中的 prompt 再清理，避免内存泄漏与无效的 opencode 代理调用
+    if (isCliSession(workspace.id, sessionId)) {
+      abortCliSession(workspace.id, sessionId);
+      deleteCliSession(workspace.id, sessionId);
+      return jsonResponse({ ok: true });
     }
 
     const opencode = createWorkspaceOpencodeClient(config, workspace);

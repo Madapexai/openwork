@@ -1,7 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { detectPlatform, type DetectedPlatform } from "@openwork/ui/react";
+import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
+import { requestJson } from "../../_lib/den-flow";
+import { getInstallConfigErrorMessage } from "../../_lib/install-errors";
+import {
+  buildInstallDownloadHref,
+  detectedInstallPlatform,
+  downloadCtaLabel,
+  installerApiUrlFromConfig,
+  installTokenFromPageUrl,
+} from "../../_lib/install-download";
 import { DenButton } from "../../_components/ui/button";
 import { createOrganizationInstallLink } from "../../_lib/install-link-data";
 import { useOrgDashboard } from "../_providers/org-dashboard-provider";
@@ -19,8 +29,28 @@ export function MemberDashboardScreen() {
   const [busyAction, setBusyAction] = useState<"download" | "copy" | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detected, setDetected] = useState<DetectedPlatform | null>(null);
+  const [downloadHref, setDownloadHref] = useState<string | null>(null);
 
   const orgName = activeOrg?.name ?? "Your workspace";
+
+  useEffect(() => {
+    let cancelled = false;
+    void detectPlatform()
+      .then((platform) => {
+        if (!cancelled) {
+          setDetected(platform ?? { os: "macos", arch: "arm64", osVersion: null, source: "ua" });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetected({ os: "macos", arch: "arm64", osVersion: null, source: "ua" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function mintInstallLink() {
     if (!orgId) {
@@ -29,13 +59,46 @@ export function MemberDashboardScreen() {
     return createOrganizationInstallLink(orgId, false);
   }
 
+  function startInstallerDownload(href: string) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    link.setAttribute("data-testid", "member-download-link");
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
+
   async function handleDownload() {
     setBusyAction("download");
     setError(null);
     try {
-      window.open(await mintInstallLink(), "_blank");
+      const token = installTokenFromPageUrl(await mintInstallLink());
+      if (!token) {
+        throw new Error("The install link response was incomplete.");
+      }
+
+      const { response, payload } = await requestJson(
+        `/v1/install-config?token=${encodeURIComponent(token)}`,
+        { method: "GET" },
+        12000,
+      );
+      if (!response.ok) {
+        throw new Error(getInstallConfigErrorMessage(payload, response.status));
+      }
+
+      const apiUrl = installerApiUrlFromConfig(payload);
+      if (!apiUrl) {
+        throw new Error("This install link returned incomplete setup details.");
+      }
+
+      const platform = detectedInstallPlatform(detected) ?? "mac-arm64";
+      const href = buildInstallDownloadHref(apiUrl, platform, token);
+      setDownloadHref(href);
+      startInstallerDownload(href);
     } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : "Could not open the install page.");
+      setError(downloadError instanceof Error ? downloadError.message : "Could not prepare your download.");
     } finally {
       setBusyAction(null);
     }
@@ -70,12 +133,13 @@ export function MemberDashboardScreen() {
         <DenButton
           className="mt-8"
           data-testid="member-download-app"
+          data-download-href={downloadHref ?? undefined}
           icon={Download}
           loading={busyAction === "download"}
           disabled={busyAction !== null}
           onClick={() => void handleDownload()}
         >
-          Download OpenWork
+          {busyAction === "download" ? "Preparing your download..." : downloadCtaLabel(detected?.os ?? null)}
         </DenButton>
 
         <div className="mt-3 flex items-center gap-1.5 text-[12px] text-gray-400">

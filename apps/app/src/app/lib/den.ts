@@ -80,6 +80,24 @@ const BUILD_DEN_REQUIRE_SIGNIN =
     ? /^(1|true|yes|on)$/i.test(import.meta.env.VITE_DEN_REQUIRE_SIGNIN.trim())
     : false);
 
+/**
+ * Pins Den API calls (not the sign-in pages) to a specific base. Headless/dev
+ * web runs use it to route the Den API through a same-origin proxy so a remote
+ * control plane never needs CORS, while sign-in still opens the real web app.
+ * Read dynamically so tests can vary it; Vite inlines the env in real builds.
+ */
+function readBuildDenApiBaseUrl(): string {
+  return (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_API_BASE_URL === "string"
+    ? import.meta.env.VITE_DEN_API_BASE_URL
+    : "").trim();
+}
+
+function readForceEnvDenSettings(): boolean {
+  return (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_OPENWORK_FORCE_ENV_SETTINGS === "string"
+    ? /^(1|true|yes|on)$/i.test(import.meta.env.VITE_OPENWORK_FORCE_ENV_SETTINGS.trim())
+    : false);
+}
+
 export const HOSTED_DEFAULT_DEN_BASE_URL = "https://app.openworklabs.com";
 export const DEFAULT_DEN_BASE_URL = BUILD_DEN_BASE_URL;
 export const DEN_INFERENCE_PATH = "/dashboard/inference";
@@ -700,11 +718,17 @@ export function resolveDenBaseUrls(input: { baseUrl?: string | null; apiBaseUrl?
   const seedUrl = stripDenApiBasePath(normalizedBaseUrl ?? normalizedApiBaseUrl) ?? DEFAULT_DEN_BASE_URL;
   const baseUrl = stripDenApiBasePath(seedUrl) ?? DEFAULT_DEN_BASE_URL;
 
+  // Build-time API pin (headless/dev web): route API calls through the
+  // configured proxy regardless of which web base the caller resolved.
+  const buildDenApiBaseUrl = normalizedApiBaseUrl ? null : normalizeDenBaseUrl(readBuildDenApiBaseUrl());
+
   return {
     baseUrl,
     apiBaseUrl: normalizedApiBaseUrl
       ? ensureDenApiBasePath(normalizedApiBaseUrl) ?? normalizedApiBaseUrl
-      : ensureDenApiBasePath(baseUrl) ?? baseUrl,
+      : buildDenApiBaseUrl
+        ? ensureDenApiBasePath(buildDenApiBaseUrl) ?? buildDenApiBaseUrl
+        : ensureDenApiBasePath(baseUrl) ?? baseUrl,
   };
 }
 
@@ -840,6 +864,15 @@ export function readDenBootstrapConfig(): DenBootstrapConfig {
 export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig> {
   if (!isDesktopRuntime()) {
     const gatewayOrigin = getOpenworkGatewayOrigin();
+    // Forced env settings (headless/dev runs): stale stored base URLs from
+    // earlier sessions must not override the launcher-provided control plane.
+    if (readForceEnvDenSettings() && typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(STORAGE_BASE_URL);
+      } catch {
+        // Storage unavailable: nothing stale to clear.
+      }
+    }
     desktopBootstrapConfig = resolveDenBootstrapConfig({
       baseUrl: BUILD_DEN_BASE_URL,
       ...(gatewayOrigin ? { apiBaseUrl: gatewayOrigin } : {}),
@@ -959,15 +992,48 @@ export async function setDenBootstrapConfig(
   return readDenBootstrapConfig();
 }
 
+/**
+ * Hosted Den only approves Cloud web handoff return URLs that are HTTPS
+ * gateway / signed-preview origins. Loopback and plain HTTP (local headless
+ * web) can never be approved, so those clients must use the desktop handoff
+ * (copy link / paste grant) instead of webAuth auto-return.
+ */
+function canUseCloudWebAuthReturn(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:") return false;
+    const host = url.hostname.trim().toLowerCase();
+    if (
+      host === "localhost"
+      || host === "0.0.0.0"
+      || host === "::1"
+      || host === "[::1]"
+      || /^127(?:\.\d{1,3}){3}$/.test(host)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildDenAuthUrl(baseUrl: string, mode: "sign-in" | "sign-up"): string {
   const target = new URL(resolveDenBaseUrls(baseUrl).baseUrl);
   target.searchParams.set("mode", mode);
-  if (isDesktopDeployment()) {
+  const webReturnOrigin =
+    isWebDeployment() && typeof window !== "undefined" ? window.location.origin : null;
+  if (
+    isDesktopDeployment()
+    || (webReturnOrigin !== null && !canUseCloudWebAuthReturn(webReturnOrigin))
+  ) {
+    // Desktop app, or local/dev web that cannot receive an approved webAuth
+    // redirect: Den shows the copyable openwork:// / grant handoff instead.
     target.searchParams.set("desktopAuth", "1");
     target.searchParams.set("desktopScheme", "openwork");
-  } else if (isWebDeployment() && typeof window !== "undefined") {
+  } else if (webReturnOrigin !== null) {
     target.searchParams.set("webAuth", "1");
-    target.searchParams.set("webAuthReturn", window.location.origin);
+    target.searchParams.set("webAuthReturn", webReturnOrigin);
   }
   return target.toString();
 }

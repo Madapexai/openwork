@@ -105,6 +105,9 @@ test("the agent MCP exposes the custom Artifact view authoring lifecycle", { tim
   expect(initialized.response.ok, initialized.text).toBe(true)
   expect(initialized.text).toContain("io.modelcontextprotocol/ui")
 
+  const initialTools = await agentRpc(den.ref.apiUrl, mcpToken, "tools/list", {})
+  expect(toolResourceUri(initialTools, "save_artifact_view")).toBeNull()
+
   const code = 'return { title: "Quarterly plan", status: "Ready" }'
   const executed = await agentRpc(den.ref.apiUrl, mcpToken, "tools/call", {
     name: "execute_capability_script",
@@ -162,6 +165,7 @@ test("the agent MCP exposes the custom Artifact view authoring lifecycle", { tim
   const firstRevision = Array.isArray(firstView.revisions) ? firstView.revisions.filter(isRecord)[0] : undefined
   const firstUri = String(firstRevision?.resourceUri ?? "")
   expect(firstUri).toBe(`ui://openwork/artifacts/${artifactViewId}/views/${firstRevisionId}/index.html`)
+  expect(JSON.stringify(firstSave.content)).toContain(`render_artifact_${artifactViewId}`)
 
   const firstRead = resourceContent(await agentRpc(den.ref.apiUrl, mcpToken, "resources/read", { uri: firstUri }))
   const firstHtml = String(firstRead.text ?? "")
@@ -169,6 +173,8 @@ test("the agent MCP exposes the custom Artifact view authoring lifecycle", { tim
   expect(firstHtml).toContain("ui/initialize")
   expect(firstHtml).toContain("2026-01-26")
   expect(firstHtml).toContain("ResizeObserver")
+  expect(firstHtml).toContain("MCP_APP_DOCUMENT_RUNTIME_ERROR")
+  expect(firstHtml).not.toContain("<script src=")
   expect(firstHtml).not.toContain('"Ready"')
 
   const renderName = `render_artifact_${artifactViewId}`

@@ -4,7 +4,7 @@ import {
   type AutomationDesktopRunnerCapability,
 } from "@openwork/types/automations"
 import { env } from "../env.js"
-import { firstForwardedValue, trustedForwardedOrigin } from "../request-url.js"
+import { firstForwardedValue, publicRequestUrl, trustedForwardedOrigin } from "../request-url.js"
 
 const TOKEN_TTL_MS = 12 * 60 * 60_000
 const TOKEN_ROUTE_SUFFIX = "/v1/automation-runners/token"
@@ -48,7 +48,10 @@ export function automationRunnerAudienceFromRequestUrl(requestUrl: string): stri
  * Bind proxied runner credentials to the public Den route the desktop will
  * actually use. The Den Web proxy strips caller-supplied forwarding headers
  * and writes its own, while trustedForwardedOrigin limits the destination to
- * configured first-party origins. Direct API requests keep their request URL.
+ * configured first-party origins. Direct API requests keep their request URL,
+ * resolved through the public scheme because hosted deployments terminate TLS
+ * ahead of this process: desktops reject a plaintext runner destination, so an
+ * http audience would silently disconnect every runner behind such a proxy.
  */
 export function automationRunnerAudienceFromRequest(
   request: Request,
@@ -60,7 +63,9 @@ export function automationRunnerAudienceFromRequest(
     const forwarded = trustedForwardedOrigin(request, { trustedOrigins: options.trustedOrigins })
     if (forwarded) return `${forwarded.origin}${DEN_WEB_PROXY_PREFIX}`
   }
-  return automationRunnerAudienceFromRequestUrl(request.url)
+  return automationRunnerAudienceFromRequestUrl(
+    publicRequestUrl(request, { trustedOrigins: options.trustedOrigins }).toString(),
+  )
 }
 
 export class AutomationRunnerAuth {

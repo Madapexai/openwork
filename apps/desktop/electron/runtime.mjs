@@ -18,6 +18,10 @@ import {
 
 const __runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 
+// 真实用户 HOME：在 dev 模式把 process.env.HOME 重定向到隔离目录之前捕获，
+// 供 server 侧 restoreRealHomeEnv() 恢复 CLI agent 的登录态/配置读取路径。
+const REAL_USER_HOME = process.env.HOME || os.homedir();
+
 const DIRECT_RUNTIME = "direct";
 const OPENWORK_SERVER_PORT_RANGE_START = 48_000;
 const OPENWORK_SERVER_PORT_RANGE_END = 51_000;
@@ -1345,6 +1349,7 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
     }
     if (devPaths) {
       env.OPENWORK_DEV_MODE = "1";
+      env.OPENWORK_REAL_HOME = REAL_USER_HOME;
       env.HOME = devPaths.homeDir;
       env.USERPROFILE = devPaths.homeDir;
       env.XDG_CONFIG_HOME = devPaths.xdgConfigHome;

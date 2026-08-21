@@ -14,7 +14,11 @@ import {
   getSsoMetadataUrl,
   getSsoOidcRedirectUrl,
   getSsoProviderForConnection,
+  parseOidcMetadataFromUrl,
+  parseSamlMetadataFromUrl,
   registerOrganizationSsoConnection,
+  testSsoConnection,
+  updateOrganizationSsoCustomDomain,
 } from "../../sso.js"
 import { orgMemberRoute } from "../../middleware/index.js"
 import type { OrgRouteVariables } from "./shared.js"
@@ -579,6 +583,235 @@ export function registerOrgSsoRoutes<T extends { Variables: OrgRouteVariables }>
       }
 
       return c.body(null, 204)
+    },
+  )
+
+  const samlMetadataRequestSchema = z.object({
+    metadataUrl: z.string().url(),
+  })
+
+  const samlMetadataResponseSchema = z.object({
+    entityID: z.string(),
+    idpSsoBinding: z.object({
+      redirect: z.string().url().nullable(),
+      post: z.string().url().nullable(),
+    }),
+    idpSloBinding: z.object({
+      redirect: z.string().url().nullable(),
+      post: z.string().url().nullable(),
+    }).nullable().optional(),
+    certificate: z.string(),
+    wantAuthnRequestsSigned: z.boolean().optional(),
+    nameIdFormat: z.array(z.string()).optional(),
+  })
+
+  app.post(
+    "/v1/sso/discover-saml-metadata",
+    describeRoute({
+      tags: ["SSO"],
+      summary: "Discover SAML IdP metadata",
+      description: "Fetches and parses a SAML IdP metadata URL to auto-fill configuration.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: { description: "SAML metadata parsed", content: { "application/json": { schema: resolver(samlMetadataResponseSchema) } } },
+        400: { description: "Invalid request", content: { "application/json": { schema: resolver(invalidRequestSchema) } } },
+        401: { description: "Unauthorized", content: { "application/json": { schema: resolver(unauthorizedSchema) } } },
+        403: { description: "Only workspace owners and admins can discover SAML metadata.", content: { "application/json": { schema: resolver(forbiddenSchema) } } },
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const access = ensureSsoReader(c)
+      if (!access.ok) {
+        return c.json(access.response, orgAccessFailureStatus(access.response))
+      }
+
+      const parsed = samlMetadataRequestSchema.safeParse(await c.req.json())
+      if (!parsed.success) {
+        return c.json({
+          error: "invalid_request",
+          details: parsed.error.issues.map((issue) => ({ message: issue.message, path: issue.path })),
+        }, 400)
+      }
+
+      try {
+        const metadata = await parseSamlMetadataFromUrl(parsed.data.metadataUrl)
+        return c.json(metadata)
+      } catch (error) {
+        return c.json({
+          error: "invalid_request",
+          details: [{ message: error instanceof Error ? error.message : "Failed to parse SAML metadata." }],
+        }, 400)
+      }
+    },
+  )
+
+  const oidcMetadataRequestSchema = z.object({
+    issuerUrl: z.string().url(),
+  })
+
+  const oidcMetadataResponseSchema = z.object({
+    issuer: z.string().url(),
+    authorizationEndpoint: z.string().url(),
+    tokenEndpoint: z.string().url(),
+    jwksUri: z.string().url(),
+    userinfoEndpoint: z.string().url().nullable(),
+    scopesSupported: z.array(z.string()).nullable().optional(),
+    responseTypesSupported: z.array(z.string()).nullable().optional(),
+    grantTypesSupported: z.array(z.string()).nullable().optional(),
+    subjectTypesSupported: z.array(z.string()).nullable().optional(),
+  })
+
+  app.post(
+    "/v1/sso/discover-oidc-metadata",
+    describeRoute({
+      tags: ["SSO"],
+      summary: "Discover OIDC IdP metadata",
+      description: "Performs OIDC discovery on an issuer URL to auto-fill configuration.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: { description: "OIDC metadata parsed", content: { "application/json": { schema: resolver(oidcMetadataResponseSchema) } } },
+        400: { description: "Invalid request", content: { "application/json": { schema: resolver(invalidRequestSchema) } } },
+        401: { description: "Unauthorized", content: { "application/json": { schema: resolver(unauthorizedSchema) } } },
+        403: { description: "Only workspace owners and admins can discover OIDC metadata.", content: { "application/json": { schema: resolver(forbiddenSchema) } } },
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const access = ensureSsoReader(c)
+      if (!access.ok) {
+        return c.json(access.response, orgAccessFailureStatus(access.response))
+      }
+
+      const parsed = oidcMetadataRequestSchema.safeParse(await c.req.json())
+      if (!parsed.success) {
+        return c.json({
+          error: "invalid_request",
+          details: parsed.error.issues.map((issue) => ({ message: issue.message, path: issue.path })),
+        }, 400)
+      }
+
+      try {
+        const metadata = await parseOidcMetadataFromUrl(parsed.data.issuerUrl)
+        return c.json(metadata)
+      } catch (error) {
+        return c.json({
+          error: "invalid_request",
+          details: [{ message: error instanceof Error ? error.message : "Failed to parse OIDC metadata." }],
+        }, 400)
+      }
+    },
+  )
+
+  const testConnectionRequestSchema = z.object({
+    kind: z.enum(["saml", "oidc"]),
+    issuer: z.string().url(),
+    entryPoint: z.string().url().optional(),
+    cert: z.string().optional(),
+    clientId: z.string().optional(),
+    skipDiscovery: z.boolean().optional(),
+    authorizationEndpoint: z.string().url().optional(),
+    tokenEndpoint: z.string().url().optional(),
+    jwksEndpoint: z.string().url().optional(),
+  })
+
+  const testConnectionResponseSchema = z.object({
+    ok: z.boolean(),
+    errors: z.array(z.string()),
+    timestamp: z.string().datetime(),
+  })
+
+  app.post(
+    "/v1/sso/test-connection",
+    describeRoute({
+      tags: ["SSO"],
+      summary: "Test SSO connection",
+      description: "Tests connectivity to the SAML or OIDC IdP endpoints.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: { description: "Connection test result", content: { "application/json": { schema: resolver(testConnectionResponseSchema) } } },
+        400: { description: "Invalid request", content: { "application/json": { schema: resolver(invalidRequestSchema) } } },
+        401: { description: "Unauthorized", content: { "application/json": { schema: resolver(unauthorizedSchema) } } },
+        403: { description: "Only workspace owners and admins can test SSO connections.", content: { "application/json": { schema: resolver(forbiddenSchema) } } },
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const access = ensureSsoReader(c)
+      if (!access.ok) {
+        return c.json(access.response, orgAccessFailureStatus(access.response))
+      }
+
+      const parsed = testConnectionRequestSchema.safeParse(await c.req.json())
+      if (!parsed.success) {
+        return c.json({
+          error: "invalid_request",
+          details: parsed.error.issues.map((issue) => ({ message: issue.message, path: issue.path })),
+        }, 400)
+      }
+
+      try {
+        const result = await testSsoConnection(parsed.data)
+        return c.json(result)
+      } catch (error) {
+        return c.json({
+          ok: false,
+          errors: [error instanceof Error ? error.message : "Connection test failed."],
+          timestamp: new Date().toISOString(),
+        })
+      }
+    },
+  )
+
+  const customDomainRequestSchema = z.object({
+    customDomain: z.string().url().nullable(),
+  })
+
+  app.post(
+    "/v1/sso/custom-domain",
+    describeRoute({
+      tags: ["SSO"],
+      summary: "Update SSO custom domain",
+      description: "Sets a custom domain for SSO callback URLs to remove platform-specific references.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: { description: "Custom domain updated" },
+        400: { description: "Invalid request", content: { "application/json": { schema: resolver(invalidRequestSchema) } } },
+        401: { description: "Unauthorized", content: { "application/json": { schema: resolver(unauthorizedSchema) } } },
+        403: { description: "Only workspace owners and super-admins can manage SSO.", content: { "application/json": { schema: resolver(forbiddenSchema) } } },
+        404: { description: "Organization not found", content: { "application/json": { schema: resolver(organizationNotFoundSchema) } } },
+      },
+    }),
+    orgMemberRoute(),
+    async (c) => {
+      const access = ensureSsoManager(c)
+      if (!access.ok) {
+        return c.json(access.response, orgAccessFailureStatus(access.response))
+      }
+
+      const parsed = customDomainRequestSchema.safeParse(await c.req.json())
+      if (!parsed.success) {
+        return c.json({
+          error: "invalid_request",
+          details: parsed.error.issues.map((issue) => ({ message: issue.message, path: issue.path })),
+        }, 400)
+      }
+
+      const payload = c.get("organizationContext")
+      const connection = await getOrganizationSsoConnection(payload.organization.id)
+      if (!connection) {
+        return c.json({ error: "organization_not_found" }, 404)
+      }
+
+      const updated = await updateOrganizationSsoCustomDomain(
+        payload.organization.id,
+        parsed.data.customDomain,
+      )
+
+      return c.json({
+        ok: true,
+        customDomain: updated?.customDomain ?? null,
+      })
     },
   )
 }

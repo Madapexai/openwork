@@ -8,8 +8,8 @@ const cardVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-card shadow-md ring-1 ring-foreground/5 dark:ring-foreground/10",
-        outline: "border border-border bg-transparent shadow-none",
+        default: "bg-card/80 backdrop-blur-xl backdrop-saturate-180 shadow-xl ring-1 ring-white/5 dark:ring-white/10",
+        outline: "border border-border/60 bg-transparent shadow-none",
       },
       size: {
         default: "gap-6 py-6",

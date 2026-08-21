@@ -305,4 +305,75 @@ export const BUILT_IN_OPENWORK_EXTENSION_MANIFESTS: OpenWorkExtensionManifest[] 
     ],
     lifecycle: { reload: ["config"], detection: ["provider:ollama"] },
   },
+  // L3 plugin extension seam — Team Autonomy manifest.
+  //   The actual manifest is defined in the @openwork-ee/team-autonomy npm
+  //   package (ee/packages/team-autonomy) so both the desktop app and Den
+  //   server agree on one source of truth. Because the app is not an EE
+  //   package, we use a TINY local mirror here — the single source of truth
+  //   lives in ee/packages/team-autonomy/src/ui/manifest.ts and MUST be kept
+  //   in sync via review.
+  {
+    schemaVersion: 1,
+    id: "openwork-team-autonomy",
+    name: "Team Autonomy",
+    description:
+      "Multi-agent team governance: decompose tasks into boards, auto-create personal team per user, gate permissions with standing rules, and validate skills before agents run them.",
+    preview: true,
+    source: { format: "openwork-builtin", origin: "builtin", trusted: true },
+    composer: {
+      prompt:
+        "Use Team Autonomy to delegate to a team, break a plan into tasks, or check team inbox for approvals. ",
+    },
+    setup: {
+      instructions:
+        "Team Autonomy is part of the Enterprise server build. Set TEAM_AUTONOMY_ENABLED=1 on the Den host, then open Team → Board from the sidebar to see tasks and agents.",
+      requiredEnv: ["TEAM_AUTONOMY_ENABLED"],
+    },
+    resources: [
+      {
+        type: "local-service",
+        id: "team-autonomy-api",
+        label: "Team Autonomy HTTP routes",
+        description: "Hosted on Den under /api/teams/:teamId/*",
+        required: true,
+      },
+    ],
+    contributions: [
+      {
+        type: "settings-panel",
+        ref: "openwork.teamAutonomy.settings",
+        location: "settings-detail",
+        label: "Team Autonomy",
+        description:
+          "Org admins: default permission profile, standing rules, agent engine defaults.",
+      },
+      {
+        type: "session-side-panel",
+        ref: "openwork.teamAutonomy.boardPanel",
+        location: "session-right-pane",
+        label: "Team Board",
+      },
+      {
+        type: "session-rail-item",
+        ref: "openwork.teamAutonomy.rail",
+        label: "Team Board",
+        location: "session-rail",
+      },
+      {
+        type: "composer-prompt",
+        prompt:
+          "Use Team Autonomy to delegate to a team, break a plan into tasks, or check team inbox for approvals. ",
+        location: "composer",
+      },
+      { type: "control-actions", ref: "openwork.teamAutonomy.controlActions" },
+    ],
+    enablement: [
+      { type: "toggle-enabled", ref: "openwork-team-autonomy", label: "Enabled" },
+      { type: "env-set", ref: "TEAM_AUTONOMY_ENABLED", label: "Server license flag" },
+    ],
+    lifecycle: { reload: ["config", "agents"], detection: ["env:TEAM_AUTONOMY_ENABLED"] },
+    defaultEnabled: false,
+    defaultHidden: false,
+    platform: ["darwin", "linux", "windows", "web"],
+  },
 ];

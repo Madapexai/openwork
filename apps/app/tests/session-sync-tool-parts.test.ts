@@ -127,7 +127,7 @@ describe("tool part mapper", () => {
     expect(parseDynamicToolUIPart(part)?.callProviderMetadata).toEqual({
       opencode: { partId: "part-write" },
       openwork: {
-        mcpApp: {
+        mcpResult: {
           content: [{ type: "text", text: "Fallback" }],
           structuredContent: { schemaVersion: "1", value: 42 },
           _meta: { receiptId: "receipt_1" },

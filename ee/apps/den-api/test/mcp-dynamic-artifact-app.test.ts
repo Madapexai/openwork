@@ -212,3 +212,15 @@ test("keeps missing snapshots useful to clients without a UI", async () => {
     })
   })
 })
+
+test("exposes codex rendering hints in the payload schema", async () => {
+  await withClient(async (client) => {
+    const tools = await client.listTools()
+    const tool = tools.tools.find((candidate) => candidate.name === DYNAMIC_ARTIFACT_APP_TOOL_NAME)
+    expect(tool).toBeDefined()
+    const outputSchema = tool?.outputSchema as Record<string, unknown>
+    expect(outputSchema).toBeDefined()
+    const properties = (outputSchema as Record<string, { properties: Record<string, unknown> }>)?.properties
+    expect(properties?.codex).toBeDefined()
+  })
+})

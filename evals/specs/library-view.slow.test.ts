@@ -318,7 +318,7 @@ test.skipIf(!apiUrl || !webUrl)(title, async () => {
          const signInCaption = document.querySelector('[data-library-section="needs_signin"] h2');
          const fromFacet = [...document.querySelectorAll('[aria-label="Library filters"] label')]
            .some((entry) => (entry.textContent ?? "").includes("From ·"));
-         return [...document.querySelectorAll("h1")].some((entry) => entry.textContent?.trim() === "Library")
+         return [...document.querySelectorAll("h1")].some((entry) => entry.textContent?.trim() === "My Library")
            && text.includes(${JSON.stringify(pluginName)})
            && Boolean(connectionRow)
            && tabs.some((label) => label.startsWith("Needs your sign-in"))
@@ -342,7 +342,7 @@ test.skipIf(!apiUrl || !webUrl)(title, async () => {
   );
   expect(libraryNavPresent).toBe(true);
   const descriptionOutsideHero = await evalIn(browser, `(() => {
-    const heading = [...document.querySelectorAll("h1")].find((entry) => entry.textContent?.trim() === "Library");
+    const heading = [...document.querySelectorAll("h1")].find((entry) => entry.textContent?.trim() === "My Library");
     const hero = heading?.closest("[data-dashboard-hero]");
     const description = [...document.querySelectorAll("p")].find((entry) => entry.textContent?.includes("Everything you can use in chat"));
     return Boolean(hero && description && !hero.contains(description));

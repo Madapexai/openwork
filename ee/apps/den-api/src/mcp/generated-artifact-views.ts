@@ -18,6 +18,13 @@ import { dynamicArtifactTextFallback, type DynamicArtifactAppLoadResult } from "
 const idSchema = z.string().trim().min(1).max(160)
 const saveOutputSchema = z.object({ view: generatedArtifactViewSchema })
 
+function errorToolResult(error: string, message: string, details: Record<string, unknown> = {}) {
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify({ error, message, ...details }) }],
+  }
+}
+
 export type GeneratedArtifactResource = {
   html: string
   resourceDigest: string
@@ -210,13 +217,15 @@ export function registerAgentGeneratedArtifactViews(input: {
       title: "Build and save Artifact view",
       description: [
         "Compile React source into a self-contained immutable MCP App revision bound to one saved Script output schema.",
-        "Provide a default-exported React component that receives { data, artifact }; do not import modules or access host globals.",
+        "Prerequisite: the saved Script's current version must declare an explicit JSON Schema outputSchema matching its successful result data. If it does not, test and create a new saved Script version with that outputSchema before calling this tool.",
+        "Provide a default-exported React component that receives { data, artifact }. React is already injected: use React.useState and other React APIs without imports. Do not import modules, fetch data, access browser globals, or add URL-bearing elements; all render-time data comes from data.",
         "A first successful revision activates automatically. Editing creates a previewable revision and never changes the active revision.",
+        "This management tool does not render a view. A successful result names the exact registered render_artifact_* or preview_artifact_* tool to call next. A failed build returns artifact_view_build_failed with diagnostics; correct those diagnostics once and retry using the returned artifactViewId.",
       ].join(" "),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       inputSchema: z.object({
         artifactViewId: idSchema.optional().describe("Existing Artifact view to revise. Omit to create a new view."),
-        configObjectId: idSchema.describe("Saved Script whose validated result data this view renders."),
+        configObjectId: idSchema.describe("Saved Script whose current version has a non-null outputSchema and whose validated result data this view renders."),
         title: z.string().trim().min(1).max(255),
         description: z.string().trim().max(2_000).optional(),
         reactSource: z.string().trim().min(1).max(200_000),
@@ -225,16 +234,37 @@ export function registerAgentGeneratedArtifactViews(input: {
       outputSchema: saveOutputSchema,
     },
     async (request, extra) => {
-      const view = await input.save(request)
-      const revision = view.revisions[0]
-      if (revision?.buildStatus === "ready") {
-        syncView(view)
-        await sendCatalogChanged(extra)
+      let view: GeneratedArtifactView
+      try {
+        view = await input.save(request)
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "artifact_view_save_failed"
+        if (code === "artifact_view_output_schema_required") {
+          return errorToolResult(code,
+            "This saved Script's current version has no outputSchema. Do not retry save_artifact_view yet. Test a new saved Script version with an explicit JSON Schema outputSchema that matches the returned data, create that version using the test's receiptId and the exact unchanged draft, then retry this tool.",
+            { configObjectId: request.configObjectId })
+        }
+        throw error
       }
+      const revision = view.revisions[0]
+      if (!revision || revision.buildStatus !== "ready") {
+        return errorToolResult(
+          "artifact_view_build_failed",
+          "The immutable revision was saved, but its React/CSS build failed. Correct the listed diagnostics and retry once with artifactViewId set to the returned artifactViewId. Do not call a render tool until a revision builds successfully.",
+          {
+            artifactViewId: view.id,
+            viewRevisionId: revision?.id ?? null,
+            diagnostics: revision?.diagnostics ?? [],
+          },
+        )
+      }
+      syncView(view)
+      await sendCatalogChanged(extra)
+      const displayToolName = view.status === "active" && view.activeRevisionId === revision.id
+        ? `render_artifact_${view.id}`
+        : `preview_artifact_${view.id}`
       return {
-        content: [{ type: "text" as const, text: revision?.buildStatus === "ready"
-          ? `Saved immutable view revision ${revision.id} at ${revision.resourceUri}.`
-          : `Saved failed view revision ${revision?.id ?? "unknown"}; inspect build diagnostics.` }],
+        content: [{ type: "text" as const, text: `Saved immutable view revision ${revision.id} at ${revision.resourceUri}. This save action has no interactive UI; call ${displayToolName} to display that revision.` }],
         structuredContent: { view },
       }
     },
@@ -254,7 +284,7 @@ export function registerAgentGeneratedArtifactViews(input: {
       syncView(view)
       await sendCatalogChanged(extra)
       return {
-        content: [{ type: "text" as const, text: `Activated view revision ${request.revisionId}.` }],
+        content: [{ type: "text" as const, text: `Activated view revision ${request.revisionId}. Call render_artifact_${view.id} to display it.` }],
         structuredContent: { view },
       }
     },

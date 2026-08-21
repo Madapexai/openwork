@@ -18,8 +18,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
+import {
+  addCliAgentOptionalModel,
+  cliModelMatches,
+  deleteCliAgentOptionalModel,
+  getCliAgentSupportedModels,
+  isCliModelOptional,
+} from "./cli-agent-model-store";
 import { readDenSettings } from "@/app/lib/den";
 import { modelEquals, resolveProviderDisplayName } from "../../../../app/utils";
 import type { ModelOption, ModelRef } from "../../../../app/types";
@@ -67,6 +85,12 @@ export type ModelPickerModalProps = {
   openWorkModelsSyncing?: boolean;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   restrictToCloud?: boolean;
+  /** Active CLI agent (e.g. "kimi"). When set, the picker prioritizes that
+   *  agent's supported models and confirms before registering an unsupported
+   *  model as an optional model for it. */
+  agentId?: string | null;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
 };
 
 type ProviderGroup = {
@@ -139,6 +163,131 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     [props.disabledProviders],
   );
 
+  /* ---- CLI-agent-aware model support ---- */
+  const hasAgentContext = Boolean(props.agentId);
+  const agentLabel = useMemo(
+    () => (props.agentId ? props.agentId.charAt(0).toUpperCase() + props.agentId.slice(1) : ""),
+    [props.agentId],
+  );
+  const [, forceStoreRefresh] = useState(0);
+  // The set of models this CLI agent can currently run: its built-in default
+  // plus any optional models the user has registered via this dialog.
+  const supportedRefs = useMemo<ModelRef[]>(() => {
+    void forceStoreRefresh;
+    return props.agentId ? getCliAgentSupportedModels(props.agentId, props.agentDefaultModel ?? undefined) : [];
+  }, [props.agentId, props.agentDefaultModel, forceStoreRefresh]);
+  const supportedSet = useMemo(
+    () => new Set(supportedRefs.map((m) => `${m.providerID}/${m.modelID}`)),
+    [supportedRefs],
+  );
+  const isModelSupported = useCallback(
+    (providerID: string, modelID: string) => supportedSet.has(`${providerID}/${modelID}`),
+    [supportedSet],
+  );
+
+  // Two-view picker: provider perspective (grouped) vs model perspective
+  // (flat). Only surfaced when a CLI agent is active, otherwise the classic
+  // single provider-grouped view is kept.
+  const [view, setView] = useState<"provider" | "model">("provider");
+  const [confirmModel, setConfirmModel] = useState<ModelOption | null>(null);
+  const [deleteModel, setDeleteModel] = useState<ModelRef | null>(null);
+
+  // Filter by search (declared before the agent-aware memos that consume it)
+  const filteredOptions = useMemo(() => {
+    const q = props.query.trim().toLowerCase();
+    if (!q) return props.options;
+    return props.options.filter(
+      (o) =>
+        o.title.toLowerCase().includes(q) ||
+        o.providerID.toLowerCase().includes(q) ||
+        o.modelID.toLowerCase().includes(q) ||
+        (o.description ?? "").toLowerCase().includes(q),
+    );
+  }, [props.options, props.query]);
+
+  // Synthesize ModelOption entries for the CLI agent's supported models so
+  // they show up even when their provider is not (yet) a connected source.
+  const agentSupportedOptions = useMemo<ModelOption[]>(() => {
+    if (!hasAgentContext) return [];
+    const byKey = new Map<string, ModelOption>();
+    for (const opt of filteredOptions) byKey.set(`${opt.providerID}/${opt.modelID}`, opt);
+    return supportedRefs
+      .map((ref) => {
+        const existing = byKey.get(`${ref.providerID}/${ref.modelID}`);
+        if (existing) return existing;
+        return {
+          providerID: ref.providerID,
+          modelID: ref.modelID,
+          title: ref.modelID,
+          description: resolveProviderDisplayName(ref.providerID),
+          behaviorTitle: "Reasoning",
+          behaviorLabel: "Default",
+          behaviorDescription: "",
+          behaviorValue: null,
+          isFree: false,
+          isRecommended: false,
+        };
+      })
+      .filter((opt, index, arr) => arr.findIndex((o) => o.providerID === opt.providerID && o.modelID === opt.modelID) === index);
+  }, [filteredOptions, hasAgentContext, supportedRefs]);
+
+  // Flat "model view": agent-supported models first, then everything else.
+  const modelViewOptions = useMemo<ModelOption[]>(() => {
+    if (!hasAgentContext) return filteredOptions;
+    const seen = new Set<string>();
+    const out: ModelOption[] = [];
+    for (const opt of agentSupportedOptions) {
+      seen.add(`${opt.providerID}/${opt.modelID}`);
+      out.push(opt);
+    }
+    for (const opt of filteredOptions) {
+      const key = `${opt.providerID}/${opt.modelID}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(opt);
+    }
+    return out;
+  }, [agentSupportedOptions, filteredOptions, hasAgentContext]);
+
+  // Selecting a model: supported models (or any model when no CLI agent is
+  // active) apply immediately; an unsupported model asks before registering
+  // it as an optional model for the active CLI agent.
+  const requestSelect = useCallback(
+    (opt: ModelOption) => {
+      const ref = { providerID: opt.providerID, modelID: opt.modelID };
+      if (!hasAgentContext || isModelSupported(opt.providerID, opt.modelID)) {
+        props.onSelect(ref);
+        return;
+      }
+      setConfirmModel(opt);
+    },
+    [hasAgentContext, isModelSupported, props.onSelect],
+  );
+  const confirmAddOptional = useCallback(() => {
+    if (props.agentId && confirmModel) {
+      addCliAgentOptionalModel(props.agentId, {
+        providerID: confirmModel.providerID,
+        modelID: confirmModel.modelID,
+      });
+      forceStoreRefresh((n) => n + 1);
+      props.onSelect({ providerID: confirmModel.providerID, modelID: confirmModel.modelID });
+    }
+    setConfirmModel(null);
+  }, [confirmModel, props]);
+  const cancelConfirm = useCallback(() => setConfirmModel(null), []);
+
+  const requestDelete = useCallback((ref: ModelRef) => {
+    setDeleteModel(ref);
+  }, []);
+  const confirmDelete = useCallback(() => {
+    if (props.agentId && deleteModel) {
+      deleteCliAgentOptionalModel(props.agentId, deleteModel);
+      forceStoreRefresh((n) => n + 1);
+    }
+    setDeleteModel(null);
+  }, [deleteModel, props.agentId]);
+  const cancelDelete = useCallback(() => setDeleteModel(null), []);
+
   // Reset on open
   useEffect(() => {
     if (props.open) {
@@ -158,19 +307,6 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [props.open]);
-
-  // Filter by search
-  const filteredOptions = useMemo(() => {
-    const q = props.query.trim().toLowerCase();
-    if (!q) return props.options;
-    return props.options.filter(
-      (o) =>
-        o.title.toLowerCase().includes(q) ||
-        o.providerID.toLowerCase().includes(q) ||
-        o.modelID.toLowerCase().includes(q) ||
-        (o.description ?? "").toLowerCase().includes(q),
-    );
-  }, [props.options, props.query]);
 
   // Group by provider
   const providerGroups = useMemo<ProviderGroup[]>(() => {
@@ -204,13 +340,20 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
       group.recommended.sort((a, b) => a.title.localeCompare(b.title));
       group.other.sort((a, b) => a.title.localeCompare(b.title));
     }
+    const supportedProviders = new Set<string>();
+    for (const ref of supportedRefs) supportedProviders.add(ref.providerID);
     return groups.sort((a, b) => {
+      if (hasAgentContext) {
+        const aSupported = supportedProviders.has(a.id);
+        const bSupported = supportedProviders.has(b.id);
+        if (aSupported !== bSupported) return aSupported ? -1 : 1;
+      }
       if (a.isDisabled !== b.isDisabled) return a.isDisabled ? 1 : -1;
       if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
       if (a.hasCurrent !== b.hasCurrent) return a.hasCurrent ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  }, [filteredOptions, props.current, disabledSet]);
+  }, [filteredOptions, props.current, disabledSet, hasAgentContext, supportedRefs]);
 
   // Auto-expand on search
   useEffect(() => {
@@ -284,8 +427,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   }, []);
 
   const handleSelect = useCallback(
-    (opt: ModelOption) => props.onSelect({ providerID: opt.providerID, modelID: opt.modelID }),
-    [props.onSelect],
+    (opt: ModelOption) => requestSelect(opt),
+    [requestSelect],
   );
 
   const handleRefreshOrganizationModels = useCallback(async () => {
@@ -395,44 +538,98 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           ) : null}
 
           {/* Content */}
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 -mr-1">
-            {emptyState ? (
-              <div className="space-y-3 rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center">
-                <div className="text-sm text-dls-secondary">
-                  {t(emptyState.messageKey)}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {hasAgentContext ? (
+              <div className="mb-3 shrink-0">
+                <Tabs value={view} onValueChange={(v) => setView(v as "provider" | "model")}>
+                  <TabsList className="w-full">
+                    <TabsTrigger value="provider" className="flex-1">Providers</TabsTrigger>
+                    <TabsTrigger value="model" className="flex-1">Models</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <div className="mt-1.5 px-1 text-[11px] text-dls-secondary">
+                  {agentSupportedOptions.length > 0
+                    ? `${agentLabel} can run ${agentSupportedOptions.length} model${agentSupportedOptions.length === 1 ? "" : "s"} below.`
+                    : `${agentLabel} has no registered models yet. Adding one will make it switchable in ${agentLabel}.`}
                 </div>
-                {emptyState.showRefreshOrganizationModels ? (
-                  <Button variant="outline" onClick={() => void handleRefreshOrganizationModels()} disabled={refreshingOrganizationModels}>
-                    <RefreshCw className={`mr-1 size-3 ${refreshingOrganizationModels ? "animate-spin" : ""}`} />
-                    {refreshingOrganizationModels ? t("models.refreshing_organization_models") : t("models.refresh_organization_models")}
-                  </Button>
-                ) : null}
-                {emptyState.showOrganizationModelsSettings && organizationModelsSettingsUrl ? (
-                  <Button variant="ghost" onClick={() => platform.openLink(organizationModelsSettingsUrl)}>
-                    {t("models.manage_organization_models")}
-                  </Button>
-                ) : null}
-                {emptyState.showConnectProvider ? (
-                  <Button variant="outline" onClick={props.onOpenSettings}>
-                    {t("models.connect_provider")}
-                  </Button>
-                ) : null}
               </div>
-            ) : (
-              providerGroups.map((group) => (
-                <ProviderAccordion
-                  key={group.id}
-                  group={group}
-                  expanded={expandedProviders.has(group.id)}
-                  current={props.current}
-                  canToggleProvider={!!props.onToggleProvider}
-                  onToggleExpand={() => toggleProvider(group.id)}
-                  onToggleProvider={props.onToggleProvider}
-                  onSelect={handleSelect}
-                  organizationProviderLabel={organizationProviderLabel}
-                />
-              ))
-            )}
+            ) : null}
+
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 -mr-1">
+              {emptyState ? (
+                <div className="space-y-3 rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center">
+                  <div className="text-sm text-dls-secondary">
+                    {t(emptyState.messageKey)}
+                  </div>
+                  {emptyState.showRefreshOrganizationModels ? (
+                    <Button variant="outline" onClick={() => void handleRefreshOrganizationModels()} disabled={refreshingOrganizationModels}>
+                      <RefreshCw className={`mr-1 size-3 ${refreshingOrganizationModels ? "animate-spin" : ""}`} />
+                      {refreshingOrganizationModels ? t("models.refreshing_organization_models") : t("models.refresh_organization_models")}
+                    </Button>
+                  ) : null}
+                  {emptyState.showOrganizationModelsSettings && organizationModelsSettingsUrl ? (
+                    <Button variant="ghost" onClick={() => platform.openLink(organizationModelsSettingsUrl)}>
+                      {t("models.manage_organization_models")}
+                    </Button>
+                  ) : null}
+                  {emptyState.showConnectProvider ? (
+                    <Button variant="outline" onClick={props.onOpenSettings}>
+                      {t("models.connect_provider")}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : view === "model" && hasAgentContext ? (
+                <div className="space-y-1">
+                  {modelViewOptions.length === 0 ? (
+                    <div className="rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center text-sm text-dls-secondary">
+                      {t("models.no_models_match_search")}
+                    </div>
+                  ) : (
+                    modelViewOptions.map((opt) => (
+                      <DefaultModelRow
+                        key={`${opt.providerID}/${opt.modelID}`}
+                        opt={opt}
+                        current={props.current}
+                        onSelect={handleSelect}
+                        supportedLabel={isModelSupported(opt.providerID, opt.modelID) ? agentLabel : undefined}
+                        isOptional={Boolean(props.agentId) && isCliModelOptional(props.agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                        onDelete={props.agentId ? () => requestDelete({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+                      />
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {hasAgentContext && agentSupportedOptions.length > 0 ? (
+                    <AgentSupportedSection
+                      agentLabel={agentLabel}
+                      options={agentSupportedOptions}
+                      current={props.current}
+                      onSelect={handleSelect}
+                      agentId={props.agentId ?? undefined}
+                      onDeleteModel={requestDelete}
+                    />
+                  ) : null}
+                  {providerGroups.map((group) => (
+                    <ProviderAccordion
+                      key={group.id}
+                      group={group}
+                      expanded={expandedProviders.has(group.id)}
+                      current={props.current}
+                      canToggleProvider={!!props.onToggleProvider}
+                      onToggleExpand={() => toggleProvider(group.id)}
+                      onToggleProvider={props.onToggleProvider}
+                      onSelect={handleSelect}
+                      organizationProviderLabel={organizationProviderLabel}
+                      supportsAgentLabel={hasAgentContext ? agentLabel : undefined}
+                      isModelSupported={isModelSupported}
+                      agentId={props.agentId ?? undefined}
+                      onDeleteModel={requestDelete}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -443,6 +640,40 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           </DialogClose>
         </DialogFooter>
       </DialogContent>
+
+      {/* Confirm registering an unsupported model for the active CLI agent. */}
+      <AlertDialog open={confirmModel !== null} onOpenChange={(open) => { if (!open) setConfirmModel(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Add this model to {agentLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{confirmModel?.providerID}/{confirmModel?.modelID}</strong> is not currently supported by the
+              {" "}{agentLabel} CLI agent. Add it as an optional model so you can switch to it within {agentLabel}?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelConfirm}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmAddOptional}>Add &amp; use</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm removing an optional model from the active CLI agent. */}
+      <AlertDialog open={deleteModel !== null} onOpenChange={(open) => { if (!open) setDeleteModel(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this model from {agentLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{deleteModel?.providerID}/{deleteModel?.modelID}</strong> will no longer be available within
+              {" "}{agentLabel}. You can add it back later from any provider.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDelete}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
@@ -460,6 +691,10 @@ function ProviderAccordion({
   onToggleProvider,
   onSelect,
   organizationProviderLabel,
+  supportsAgentLabel,
+  isModelSupported,
+  agentId,
+  onDeleteModel,
 }: {
   group: ProviderGroup;
   expanded: boolean;
@@ -469,9 +704,15 @@ function ProviderAccordion({
   onToggleProvider?: (providerId: string, enabled: boolean) => void;
   onSelect: (opt: ModelOption) => void;
   organizationProviderLabel: string;
+  supportsAgentLabel?: string;
+  isModelSupported?: (providerID: string, modelID: string) => boolean;
+  agentId?: string;
+  onDeleteModel?: (ref: ModelRef) => void;
 }) {
   const totalModels = group.recommended.length + group.other.length;
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const supportedFor = (opt: ModelOption) =>
+    supportsAgentLabel && isModelSupported ? isModelSupported(opt.providerID, opt.modelID) : false;
 
   return (
     <div className={group.isDisabled ? "opacity-50" : ""}>
@@ -530,7 +771,17 @@ function ProviderAccordion({
                 Recommended
               </div>
               {group.recommended.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} recommended />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  recommended
+                  supported={supportedFor(opt)}
+                  supportedLabel={supportsAgentLabel}
+                  isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                  onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+                />
               ))}
             </>
           ) : null}
@@ -542,7 +793,16 @@ function ProviderAccordion({
                 </div>
               ) : null}
               {group.other.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  supported={supportedFor(opt)}
+                  supportedLabel={supportsAgentLabel}
+                  isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                  onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+                />
               ))}
             </>
           ) : null}
@@ -557,27 +817,90 @@ function ProviderAccordion({
 /* ------------------------------------------------------------------ */
 
 function DefaultModelRow({
-  opt, current, onSelect, recommended,
+  opt, current, onSelect, recommended, supported, supportedLabel, isOptional, onDelete,
 }: {
-  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean;
+  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean; supported?: boolean; supportedLabel?: string; isOptional?: boolean; onDelete?: () => void;
 }) {
   const active = modelEquals(current, { providerID: opt.providerID, modelID: opt.modelID });
 
   return (
-    <button
-      type="button"
-      className={[
-        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
-        active ? "bg-green-3/50" : "hover:bg-dls-hover",
-      ].join(" ")}
-      onClick={() => onSelect(opt)}
-    >
-      {recommended ? <Star size={12} className="shrink-0 text-amber-9" /> : <div className="w-3 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
-        <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        className={[
+          "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
+          active ? "bg-green-3/50" : "hover:bg-dls-hover",
+        ].join(" ")}
+        onClick={() => onSelect(opt)}
+      >
+        {recommended ? <Star size={12} className="shrink-0 text-amber-9" /> : <div className="w-3 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
+          <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
+        </div>
+        {supported && supportedLabel ? (
+          <span className="shrink-0 rounded-md bg-green-3 px-1.5 py-0.5 text-[10px] font-medium text-green-11">
+            {supportedLabel}
+          </span>
+        ) : null}
+        {isOptional ? (
+          <span className="shrink-0 rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">
+            Optional
+          </span>
+        ) : null}
+        {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
+      </button>
+      {onDelete && isOptional ? (
+        <button
+          type="button"
+          aria-label={`Remove ${opt.modelID}`}
+          className="shrink-0 rounded-md p-1 text-dls-secondary transition-colors hover:bg-dls-hover hover:text-red-11"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        >
+          <X size={12} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pinned "For <agent>" section: the CLI agent's supported models     */
+/* ------------------------------------------------------------------ */
+
+function AgentSupportedSection({
+  agentLabel,
+  options,
+  current,
+  onSelect,
+  agentId,
+  onDeleteModel,
+}: {
+  agentLabel: string;
+  options: ModelOption[];
+  current: ModelRef;
+  onSelect: (opt: ModelOption) => void;
+  agentId?: string;
+  onDeleteModel?: (ref: ModelRef) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-green-6/50 bg-green-2/20 px-2 py-1.5">
+      <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-green-11">
+        For {agentLabel}
       </div>
-      {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
-    </button>
+      <div className="space-y-0.5">
+        {options.map((opt) => (
+          <DefaultModelRow
+            key={`${opt.providerID}/${opt.modelID}`}
+            opt={opt}
+            current={current}
+            onSelect={onSelect}
+            recommended
+            isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+            onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+          />
+        ))}
+      </div>
+    </div>
   );
 }

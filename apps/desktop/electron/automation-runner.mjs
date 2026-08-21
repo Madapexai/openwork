@@ -368,6 +368,13 @@ export function createDesktopAutomationRunner(options) {
       const normalized = destinationAllowed && token && next?.runnerId
         ? { baseUrl, token, runnerId: String(next.runnerId) }
         : null
+      if (next && !normalized) {
+        // Without this the desktop stays quiet while every scheduled run is
+        // recorded as missed, which reads as a scheduler fault rather than a
+        // credential bound to a different Den route than this desktop uses.
+        options.log?.(`rejected runner credential for ${baseUrl ?? "an unusable base URL"}`
+          + `: token audience ${binding?.audience ?? (binding ? "v1 (untrusted here)" : "unreadable")}`)
+      }
       if (configuration?.baseUrl === normalized?.baseUrl && configuration?.token === normalized?.token) {
         return { connected: Boolean(connectionController && !connectionController.signal.aborted) }
       }

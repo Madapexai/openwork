@@ -64,6 +64,37 @@ describe("Automation runner credentials", () => {
     })).toBe("https://app.openworklabs.com/api/den")
   })
 
+  test("trusts the Den Web proxy origin this API is actually served from", async () => {
+    const { env } = await import("../src/env.js")
+    const denWeb = new URL(env.betterAuthUrl)
+    const request = new Request("http://api.internal/v1/automation-runners/token", {
+      headers: {
+        "x-forwarded-host": denWeb.host,
+        "x-forwarded-proto": denWeb.protocol.replace(/:$/, ""),
+        "x-forwarded-prefix": "/api/den",
+      },
+    })
+
+    expect(automationRunnerAudienceFromRequest(request, {
+      trustedOrigins: env.publicProxyTrustedOrigins,
+    })).toBe(`${denWeb.origin}/api/den`)
+    // Hosted deployments proxy every call server-side, so the Den Web origin
+    // has no reason to appear in CORS_ORIGINS. Binding off that list alone
+    // sends desktops to the internal API, where their credential is refused
+    // and every desktop occurrence is recorded as missed.
+    expect(automationRunnerAudienceFromRequest(request, { trustedOrigins: [] }))
+      .toBe(`${denWeb.protocol}//api.internal`)
+  })
+
+  test("keeps a directly reached runner destination on its public scheme", () => {
+    const request = new Request("http://api.den.test/v1/automation-runners/token", {
+      headers: { "x-forwarded-proto": "https" },
+    })
+
+    expect(automationRunnerAudienceFromRequest(request, { trustedOrigins: [] }))
+      .toBe("https://api.den.test")
+  })
+
   test("ignores an untrusted forwarded runner destination", () => {
     const request = new Request("https://api.openworklabs.com/v1/automation-runners/token", {
       headers: {

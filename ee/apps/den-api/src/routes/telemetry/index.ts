@@ -12,7 +12,7 @@ import { describeRoute } from "hono-openapi"
 import { z } from "zod"
 import { db } from "../../db.js"
 import { checkEntitlement } from "../../entitlements.js"
-import { jsonValidator, orgMemberRoute, queryValidator } from "../../middleware/index.js"
+import { jsonValidator, orgMemberRoute, orgRoleRoute, queryValidator } from "../../middleware/index.js"
 import { enterprisePlanRequiredSchema, invalidRequestSchema, jsonResponse, unauthorizedSchema, emptyResponse } from "../../openapi.js"
 import type { AuthContextVariables } from "../../session.js"
 import type { UserOrganizationsContext, OrganizationContextVariables } from "../../middleware/index.js"
@@ -39,8 +39,8 @@ const dimensionValueSchema = z
   .trim()
   .min(1)
   .max(128)
-  .refine((value) => /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value), {
-    message: "Dimension value must contain only letters, numbers, dots, underscores, colons, or hyphens.",
+  .refine((value) => /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,127}$/.test(value), {
+    message: "Dimension value must contain only letters, numbers, dots, underscores, colons, slashes, or hyphens.",
   })
 
 const dimensionMetadataSchema = z
@@ -101,6 +101,18 @@ const analyticsWeekSchema = z.object({
   tasksFailed: z.number(),
 })
 
+const analyticsModelsSchema = z.object({
+  usage30d: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    sessions: z.number(),
+  })),
+  selection30d: z.object({
+    default: z.number(),
+    manual: z.number(),
+  }),
+})
+
 const analyticsResponseSchema = z.object({
   members: z.number(),
   pendingInvites: z.number(),
@@ -114,6 +126,7 @@ const analyticsResponseSchema = z.object({
   tasksFailed30d: z.number(),
   avgTaskDurationMs30d: z.number().nullable(),
   weekly: z.array(analyticsWeekSchema),
+  models: analyticsModelsSchema,
 }).meta({ ref: "TelemetryAnalyticsResponse" })
 
 const telemetryDimensionListResponseSchema = z.object({
@@ -442,7 +455,7 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
     describeRoute({
       tags: ["Telemetry"],
       summary: "Get usage analytics",
-      description: "Returns Layer 1 (who is using AI) and Layer 2 (how often) analytics for the active org: member counts, active members, session and task volume in 7d/30d windows, average task duration, and a 12-week trend of active members, sessions, and tasks.",
+      description: "Returns Layer 1 (who is using AI) and Layer 2 (how often) analytics for the active org: member counts, active members, session and task volume in 7d/30d windows, average task duration, model usage and selection in 30d, and a 12-week trend of active members, sessions, and tasks.",
       responses: {
         200: jsonResponse("Analytics returned.", analyticsResponseSchema),
         400: jsonResponse("Invalid analytics query.", invalidRequestSchema),
@@ -450,7 +463,7 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
         402: jsonResponse("Usage analytics requires an Enterprise plan.", enterprisePlanRequiredSchema),
       },
     }),
-    orgMemberRoute(),
+    orgRoleRoute(["admin"]),
     queryValidator(analyticsQuerySchema),
     async (c) => {
       const orgId = c.get("activeOrganizationId")
@@ -472,6 +485,10 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
         tasksFailed30d: 0,
         avgTaskDurationMs30d: null,
         weekly: [],
+        models: {
+          usage30d: [],
+          selection30d: { default: 0, manual: 0 },
+        },
       }
 
       if (!orgId) {
@@ -491,7 +508,7 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
       const trendStart = new Date(now.getTime() - ANALYTICS_WEEKS * 7 * 24 * 60 * 60 * 1000)
 
-      const [memberRows, inviteRows, window7d, window30d, weeklyRows] = await Promise.all([
+      const [memberRows, inviteRows, window7d, window30d, weeklyRows, modelDimensionRows] = await Promise.all([
         db
           .select({ count: sql<number>`count(*)` })
           .from(MemberTable)
@@ -514,6 +531,29 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
           .where(and(...telemetryWindowConditions(orgId, trendStart, dimensionFilter)))
           .groupBy(sql`FLOOR(DATEDIFF(${TelemetryEventTable.event_timestamp}, ${trendStart}) / 7)`)
           .orderBy(sql`FLOOR(DATEDIFF(${TelemetryEventTable.event_timestamp}, ${trendStart}) / 7)`),
+        db
+          .select({
+            type: TelemetrySessionDimensionTable.dimension_type,
+            value: TelemetrySessionDimensionTable.dimension_value,
+            label: sql<string>`max(${TelemetrySessionDimensionTable.dimension_label})`,
+            sessions: sql<number>`count(distinct ${TelemetrySessionDimensionTable.session_id})`,
+          })
+          .from(TelemetrySessionDimensionTable)
+          .innerJoin(TelemetryEventTable, and(
+            eq(TelemetryEventTable.org_id, TelemetrySessionDimensionTable.org_id),
+            eq(TelemetryEventTable.session_id, TelemetrySessionDimensionTable.session_id),
+            sql`coalesce(${TelemetryEventTable.source}, 'unknown') = ${TelemetrySessionDimensionTable.source}`,
+          ))
+          .where(and(
+            eq(TelemetrySessionDimensionTable.org_id, orgId),
+            sql`${TelemetrySessionDimensionTable.dimension_type} in ('model', 'model_selection')`,
+            ...telemetryWindowConditions(orgId, thirtyDaysAgo, dimensionFilter),
+          ))
+          .groupBy(
+            TelemetrySessionDimensionTable.dimension_type,
+            TelemetrySessionDimensionTable.dimension_value,
+          )
+          .orderBy(desc(sql`count(distinct ${TelemetrySessionDimensionTable.session_id})`)),
       ])
 
       const weekly = Array.from({ length: ANALYTICS_WEEKS }, (_, i) => {
@@ -527,6 +567,9 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
           tasksFailed: Number(row?.tasksFailed ?? 0),
         }
       })
+      const selectionCount = (value: "default" | "manual") => Number(
+        modelDimensionRows.find((row) => row.type === "model_selection" && row.value === value)?.sessions ?? 0,
+      )
 
       return c.json({
         members: Number(memberRows[0]?.count ?? 0),
@@ -541,6 +584,19 @@ export function registerTelemetryRoutes<T extends { Variables: TelemetryRouteVar
         tasksFailed30d: window30d.tasksFailed,
         avgTaskDurationMs30d: window30d.avgTaskDurationMs,
         weekly,
+        models: {
+          usage30d: modelDimensionRows
+            .filter((row) => row.type === "model")
+            .map((row) => ({
+              id: row.value,
+              label: row.label,
+              sessions: Number(row.sessions ?? 0),
+            })),
+          selection30d: {
+            default: selectionCount("default"),
+            manual: selectionCount("manual"),
+          },
+        },
       })
     },
   )

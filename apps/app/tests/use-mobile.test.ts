@@ -11,7 +11,7 @@ describe("getInitialIsMobile", () => {
       return { matches: true };
     });
 
-    expect(receivedQuery).toBe("(max-width: 767px)");
+    expect(receivedQuery).toBe("(max-width: 1023px)");
     expect(isMobile).toBe(true);
   });
 

@@ -481,7 +481,7 @@ function SessionHoverQuickActions({
     <div
       data-session-hover-actions
       className={cn(
-        "absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/menu-sub-item:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-has-data-popup-open/menu-sub-item:opacity-100 group-has-data-popup-open/menu-sub-item:pointer-events-auto",
+        "absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/menu-sub-item:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-has-data-popup-open/menu-sub-item:opacity-100 group-has-data-popup-open/menu-sub-item:pointer-events-auto max-lg:opacity-100 max-lg:pointer-events-auto pointer-coarse:opacity-100 pointer-coarse:pointer-events-auto",
         className,
       )}
     >
@@ -1083,7 +1083,7 @@ export function AppSidebar(props: AppSidebarProps) {
         ) : null}
         {props.conversationHistory ? (
           <div
-            className="flex shrink-0 items-center justify-end gap-0.5 px-2 pb-1 mac:absolute mac:right-1.5 mac:top-[7px] mac:z-50 mac:p-0 mac:titlebar-no-drag"
+            className="flex shrink-0 items-center justify-end gap-0.5 px-2 pb-1 max-lg:hidden mac:absolute mac:right-1.5 mac:top-[7px] mac:z-50 mac:p-0 mac:titlebar-no-drag"
             role="group"
             aria-label="Conversation history controls"
           >
@@ -1137,7 +1137,7 @@ export function AppSidebar(props: AppSidebarProps) {
                 >
                   <Search className="size-4" />
                   <span className="flex-1 truncate">{t("workspace_list.search_sessions")}</span>
-                  <kbd className="ml-auto font-sans text-[11px] tracking-wide text-sidebar-foreground/50">
+                  <kbd className="ml-auto font-sans text-[11px] tracking-wide text-sidebar-foreground/50 max-lg:hidden pointer-coarse:hidden">
                     {isMacPlatform() ? "⌘⇧F" : "Ctrl+Shift+F"}
                   </kbd>
                 </SidebarMenuButton>
@@ -1481,7 +1481,7 @@ function WorkspaceHeader({
         )}
       </SidebarGlyphSlot>
       <div
-        className="min-w-0 flex-1 cursor-grab touch-none transition-[padding] duration-75 active:cursor-grabbing group-hover/workspace-header:pr-14 group-has-[[data-workspace-actions]:focus-within]/workspace-header:pr-14 group-has-data-popup-open/workspace-header:pr-10 group-hover/workspace-header:group-has-data-popup-open/workspace-header:pr-14 pr-2"
+        className="min-w-0 flex-1 cursor-grab touch-none active:cursor-grabbing pr-8 group-hover/workspace-header:pr-20 group-has-[[data-workspace-actions]:focus-within]/workspace-header:pr-20 group-has-data-popup-open/workspace-header:pr-20"
         onPointerDown={onTitlePointerDown}
       >
         <span className="block ow-fade-truncate">{label}</span>
@@ -1605,16 +1605,19 @@ function WorkspaceSidebarGroup({
                 isLoading={isConnecting}
                 onTitlePointerDown={onWorkspaceTitlePointerDown}
               />
-              <div data-workspace-actions className="group/workspace-actions absolute right-8 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+              <div
+                data-workspace-actions
+                className="group/workspace-actions absolute right-8 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/workspace-header:opacity-100 group-hover/workspace-header:pointer-events-auto group-focus-within/workspace-actions:opacity-100 group-focus-within/workspace-actions:pointer-events-auto group-has-data-popup-open/workspace-header:opacity-100 group-has-data-popup-open/workspace-header:pointer-events-auto"
+              >
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-5 text-muted-foreground opacity-0 group-hover/workspace-header:opacity-100 group-focus-within/workspace-actions:opacity-100"
+                  data-workspace-new-task
+                  className="size-5 text-muted-foreground"
                   onClick={(e) => {
                     e.stopPropagation();
                     ctx.onCreateTaskInWorkspace(workspace.id);
                   }}
-                  disabled={ctx.newTaskDisabled}
                   aria-label={t("session.new_task")}
                   title={t("session.new_task")}
                 >
@@ -1624,13 +1627,13 @@ function WorkspaceSidebarGroup({
                   workspace={workspace}
                   isConnectionActionBusy={isConnectionActionBusy}
                   canRecover={canRecover}
-                  className="size-5 text-muted-foreground opacity-0 group-hover/workspace-header:opacity-100 group-focus-within/workspace-actions:opacity-100 data-popup-open:opacity-100"
+                  className="size-5 text-muted-foreground"
                 />
               </div>
               <Button
                 variant="ghost"
                 size="icon"
-                className="absolute right-2 top-1/2 size-5 -translate-y-1/2 text-muted-foreground flex items-center justify-center group/expand-collapse-button"
+                className="absolute right-2 top-1/2 z-10 size-5 -translate-y-1/2 text-muted-foreground flex items-center justify-center group/expand-collapse-button"
                 aria-label={isExpanded ? t("sidebar.collapse") : t("sidebar.expand")}
                 aria-expanded={isExpanded}
                 onClick={(e) => {

@@ -305,6 +305,11 @@ const defaultWebhookDependencies: WebhookDependencies = {
       external_job_id: input.span.openworkRequestId,
       external_event_id: input.span.externalEventId,
       cost_amount: input.costAmount,
+      model_id: input.span.reportedModel,
+      provider_id: "openrouter",
+      input_tokens: input.span.usageMetadata.inputTokens,
+      output_tokens: input.span.usageMetadata.outputTokens,
+      total_tokens: input.span.usageMetadata.totalTokens,
       event_type: "openrouter_usage",
       occurred_at: input.span.occurredAt,
     })

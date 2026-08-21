@@ -29,7 +29,7 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/30 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-black/50 backdrop-blur-sm duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -51,7 +51,7 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 inset-s-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rtl:translate-x-1/2 -translate-y-1/2 gap-6 overflow-hidden rounded-4xl bg-popover p-6 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/5 duration-100 outline-none sm:max-w-md dark:ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed z-50 grid gap-6 overflow-hidden bg-popover/85 backdrop-blur-2xl backdrop-saturate-180 p-6 text-sm text-popover-foreground shadow-2xl ring-1 ring-white/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:max-h-[min(92dvh,calc(100dvh-env(safe-area-inset-top)))] max-lg:w-full max-lg:max-w-none max-lg:translate-x-0 max-lg:translate-y-0 max-lg:rounded-t-3xl max-lg:rounded-b-none max-lg:pb-[max(1.5rem,env(safe-area-inset-bottom))] max-lg:data-open:slide-in-from-bottom-4 max-lg:data-closed:slide-out-to-bottom-4 lg:top-1/2 lg:inset-s-1/2 lg:w-[calc(100%-2rem)] lg:max-w-md lg:-translate-x-1/2 rtl:lg:translate-x-1/2 lg:-translate-y-1/2 lg:rounded-4xl lg:data-open:zoom-in-95 lg:data-closed:zoom-out-95",
           className
         )}
         {...props}
@@ -63,7 +63,7 @@ function DialogContent({
             render={
               <Button
                 variant="ghost"
-                className="absolute top-4 inset-e-4 bg-secondary"
+                className="absolute top-4 inset-e-4 bg-secondary/60 backdrop-blur"
                 size="icon-sm"
               />
             }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, KeyRound, RefreshCw, Shield, Trash2 } from "lucide-react";
+import { Check, Copy, Download, KeyRound, RefreshCw, Server, Shield, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardPageTemplate } from "../../_components/ui/dashboard-page-template";
 import { DenButton } from "../../_components/ui/button";
@@ -19,6 +19,31 @@ function formatDateTime(value: string | null) {
 
 type FormMode = "saml" | "oidc";
 
+type SamlMetadata = {
+  entityID: string;
+  idpSsoBinding: {
+    redirect: string | null;
+    post: string | null;
+  };
+  certificate: string;
+  wantAuthnRequestsSigned?: boolean;
+  nameIdFormat?: string[];
+};
+
+type OidcMetadata = {
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  jwksUri: string;
+  userinfoEndpoint: string | null;
+};
+
+type TestConnectionResult = {
+  ok: boolean;
+  errors: string[];
+  timestamp: string;
+};
+
 export function SsoScreen() {
   const { orgId, orgContext, runReauthableAction } = useOrgDashboard();
   const [connection, setConnection] = useState<DenOrgSsoConnection | null>(null);
@@ -32,6 +57,7 @@ export function SsoScreen() {
   const [verifyingDomain, setVerifyingDomain] = useState(false);
   const [editing, setEditing] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>("saml");
+
   const [issuer, setIssuer] = useState("");
   const [domain, setDomain] = useState("");
   const [entryPoint, setEntryPoint] = useState("");
@@ -46,6 +72,18 @@ export function SsoScreen() {
   const [jwksEndpoint, setJwksEndpoint] = useState("");
   const [userInfoEndpoint, setUserInfoEndpoint] = useState("");
   const [tokenEndpointAuthentication, setTokenEndpointAuthentication] = useState<"" | "client_secret_basic" | "client_secret_post">("");
+
+  const [metadataUrl, setMetadataUrl] = useState("");
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<SamlMetadata | OidcMetadata | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
+
+  const [customDomain, setCustomDomain] = useState("");
+  const [updatingCustomDomain, setUpdatingCustomDomain] = useState(false);
+  const [customDomainResult, setCustomDomainResult] = useState<string | null>(null);
 
   const access = useMemo(
     () => getOrgAccessFlags(orgContext?.currentMember.role ?? "member", orgContext?.currentMember.isOwner ?? false, orgContext?.roles),
@@ -151,6 +189,141 @@ export function SsoScreen() {
     }
   }
 
+  async function handleDiscoverMetadata() {
+    if (!metadataUrl) {
+      setDiscoveryError("Please enter a metadata URL.");
+      setDiscoveryResult(null);
+      return;
+    }
+
+    setDiscovering(true);
+    setDiscoveryError(null);
+    setDiscoveryResult(null);
+
+    try {
+      const endpoint = formMode === "saml" ? "/v1/sso/discover-saml-metadata" : "/v1/sso/discover-oidc-metadata";
+      const body = formMode === "saml"
+        ? { metadataUrl }
+        : { issuerUrl: metadataUrl };
+
+      const { response, payload } = await requestJson(endpoint, {
+        method: "POST",
+        headers: getOrgScopedHeaders(),
+        body: JSON.stringify(body),
+      }, 15000);
+
+      if (!response.ok) {
+        const err = payload && typeof payload === "object" && "details" in payload
+          ? (payload as { details: Array<{ message: string }> }).details.map((d) => d.message).join(", ")
+          : `Discovery failed (${response.status})`;
+        throw new Error(err);
+      }
+
+      const result = payload as SamlMetadata | OidcMetadata;
+      setDiscoveryResult(result);
+
+      if (formMode === "saml") {
+        const samlResult = result as SamlMetadata;
+        if (samlResult.entityID) setIssuer(samlResult.entityID);
+        if (samlResult.idpSsoBinding?.redirect) setEntryPoint(samlResult.idpSsoBinding.redirect);
+        else if (samlResult.idpSsoBinding?.post) setEntryPoint(samlResult.idpSsoBinding.post);
+        if (samlResult.certificate) setCert(samlResult.certificate);
+        if (!audience) setAudience("");
+      } else {
+        const oidcResult = result as OidcMetadata;
+        if (oidcResult.issuer) setIssuer(oidcResult.issuer);
+        if (oidcResult.authorizationEndpoint) setAuthorizationEndpoint(oidcResult.authorizationEndpoint);
+        if (oidcResult.tokenEndpoint) setTokenEndpoint(oidcResult.tokenEndpoint);
+        if (oidcResult.jwksUri) setJwksEndpoint(oidcResult.jwksUri);
+        if (oidcResult.userinfoEndpoint) setUserInfoEndpoint(oidcResult.userinfoEndpoint);
+      }
+    } catch (nextError) {
+      setDiscoveryError(nextError instanceof Error ? nextError.message : "Metadata discovery failed.");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function handleTestConnection() {
+    setTesting(true);
+    setTestResult(null);
+    setError(null);
+
+    try {
+      const body = {
+        kind: formMode,
+        issuer,
+        ...(formMode === "saml"
+          ? { entryPoint, cert }
+          : {
+              clientId,
+              skipDiscovery,
+              authorizationEndpoint,
+              tokenEndpoint,
+              jwksEndpoint,
+            }),
+      };
+
+      const { response, payload } = await requestJson("/v1/sso/test-connection", {
+        method: "POST",
+        headers: getOrgScopedHeaders(),
+        body: JSON.stringify(body),
+      }, 15000);
+
+      if (!response.ok) {
+        throw getRequestError(payload, response, `Test failed (${response.status}).`);
+      }
+
+      setTestResult(payload as TestConnectionResult);
+    } catch (nextError) {
+      setTestResult({
+        ok: false,
+        errors: [nextError instanceof Error ? nextError.message : "Test connection failed."],
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleUpdateCustomDomain() {
+    if (!orgId) {
+      setError("Organization not found.");
+      return;
+    }
+    if (!access.canManageSso) {
+      setError("Only workspace owners and super-admins can change SSO settings.");
+      return;
+    }
+
+    setUpdatingCustomDomain(true);
+    setCustomDomainResult(null);
+    setError(null);
+
+    try {
+      const body = {
+        customDomain: customDomain.trim() || null,
+      };
+
+      const { response, payload } = await requestJson("/v1/sso/custom-domain", {
+        method: "POST",
+        headers: getOrgScopedHeaders(),
+        body: JSON.stringify(body),
+      }, 12000);
+
+      if (!response.ok) {
+        throw getRequestError(payload, response, `Failed to update custom domain (${response.status}).`);
+      }
+
+      const result = payload as { ok: boolean; customDomain: string | null };
+      setCustomDomainResult(result.customDomain ?? "Default platform domain");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to update custom domain.");
+    } finally {
+      setUpdatingCustomDomain(false);
+    }
+  }
+
   async function handleSave() {
     if (!orgId) {
       setError("Organization not found.");
@@ -229,6 +402,9 @@ export function SsoScreen() {
           }
           setConnection(null);
           setEditing(false);
+          setDiscoveryResult(null);
+          setDiscoveryError(null);
+          setTestResult(null);
           await loadSsoConfig();
         } finally {
           setDeleting(false);
@@ -300,6 +476,9 @@ export function SsoScreen() {
   function handleCancelEdit() {
     syncFormFromConnection(connection);
     setEditing(false);
+    setDiscoveryResult(null);
+    setDiscoveryError(null);
+    setTestResult(null);
   }
 
   const formReadOnly = !access.canManageSso;
@@ -329,17 +508,92 @@ export function SsoScreen() {
             </div>
           ) : null}
 
+          {/* Custom Domain Section */}
+          <div className="mb-6 rounded-[30px] border border-gray-200 bg-white p-6 shadow-[0_18px_48px_-34px_rgba(15,23,42,0.22)]">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                <Server className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-[16px] font-semibold tracking-[-0.03em] text-gray-900">Custom SSO Domain</p>
+                <p className="mt-1 text-[13px] text-gray-500">
+                  Use your own domain for SSO callback URLs to remove platform-specific references. Leave empty to use the default platform domain.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-start gap-3">
+              <input
+                className="min-w-[240px] flex-1 rounded-[18px] border border-gray-200 px-4 py-3 text-[14px]"
+                value={customDomain}
+                onChange={(e) => setCustomDomain(e.target.value)}
+                placeholder="https://sso.yourcompany.com"
+                disabled={formReadOnly || updatingCustomDomain}
+              />
+              <DenButton
+                variant="secondary"
+                icon={RefreshCw}
+                onClick={() => void handleUpdateCustomDomain()}
+                disabled={updatingCustomDomain || formReadOnly}
+              >
+                {updatingCustomDomain ? "Updating..." : "Update domain"}
+              </DenButton>
+            </div>
+            {customDomainResult ? (
+              <div className="mt-3 flex items-center gap-2 rounded-[14px] border border-green-200 bg-green-50 px-4 py-2 text-[13px] text-green-700">
+                <Check className="h-4 w-4" />
+                Custom domain set to: <code className="font-mono">{customDomainResult}</code>
+              </div>
+            ) : null}
+          </div>
+
           {showConnectionForm ? (
             <div className="mb-6 rounded-[30px] border border-gray-200 bg-white p-6 shadow-[0_18px_48px_-34px_rgba(15,23,42,0.22)]">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
-                  <DenButton variant={formMode === "saml" ? "primary" : "secondary"} onClick={() => setFormMode("saml")} disabled={formReadOnly || saving}>SAML</DenButton>
-                  <DenButton variant={formMode === "oidc" ? "primary" : "secondary"} onClick={() => setFormMode("oidc")} disabled={formReadOnly || saving}>OIDC</DenButton>
+                  <DenButton variant={formMode === "saml" ? "primary" : "secondary"} onClick={() => setFormMode("saml")} disabled={ssoFormDisabled}>SAML</DenButton>
+                  <DenButton variant={formMode === "oidc" ? "primary" : "secondary"} onClick={() => setFormMode("oidc")} disabled={ssoFormDisabled}>OIDC</DenButton>
                 </div>
                 {connection && editing ? <DenButton variant="secondary" onClick={handleCancelEdit}>Cancel edit</DenButton> : null}
               </div>
 
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
+              {/* Metadata Discovery */}
+              <div className="mt-5 rounded-[20px] border border-violet-200 bg-violet-50/50 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-violet-600" />
+                  <span className="text-[13px] font-medium text-violet-900">Auto-discover metadata</span>
+                </div>
+                <div className="flex flex-wrap items-start gap-3">
+                  <input
+                    className="min-w-[240px] flex-1 rounded-[16px] border border-violet-200 bg-white px-4 py-2.5 text-[13px]"
+                    value={metadataUrl}
+                    onChange={(e) => setMetadataUrl(e.target.value)}
+                    placeholder={formMode === "saml" ? "https://idp.example.com/metadata" : "https://idp.example.com"}
+                    disabled={ssoFormDisabled || discovering}
+                  />
+                  <DenButton
+                    variant="primary"
+                    icon={Download}
+                    onClick={() => void handleDiscoverMetadata()}
+                    disabled={ssoFormDisabled || discovering || !metadataUrl}
+                  >
+                    {discovering ? "Discovering..." : "Discover"}
+                  </DenButton>
+                </div>
+                {discoveryError ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-[12px] bg-red-50 px-3 py-2 text-[13px] text-red-700">
+                    <X className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    {discoveryError}
+                  </div>
+                ) : null}
+                {discoveryResult ? (
+                  <div className="mt-3 flex items-center gap-2 rounded-[12px] bg-green-50 px-3 py-2 text-[13px] text-green-700">
+                    <Check className="h-4 w-4" />
+                    Metadata discovered and auto-filled. Review and adjust if needed.
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <label className="block text-[14px] text-gray-700">
                   <span className="mb-2 block font-medium">{formMode === "saml" ? "IdP Issuer URL" : "Issuer URL"}</span>
                   <input className="w-full rounded-[18px] border border-gray-200 px-4 py-3" value={issuer} onChange={(event) => setIssuer(event.target.value)} placeholder="https://idp.example.com" disabled={ssoFormDisabled} />
@@ -356,7 +610,7 @@ export function SsoScreen() {
                     </label>
                     <label className="block text-[14px] text-gray-700 md:col-span-2">
                       <span className="mb-2 block font-medium">Audience URL</span>
-                      <input className="w-full rounded-[18px] border border-gray-200 px-4 py-3" value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="Defaults to the OpenWork auth URL" disabled={ssoFormDisabled} />
+                      <input className="w-full rounded-[18px] border border-gray-200 px-4 py-3" value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="Defaults to your configured domain" disabled={ssoFormDisabled} />
                     </label>
                     <label className="block text-[14px] text-gray-700 md:col-span-2">
                       <span className="mb-2 block font-medium">IdP Certificate</span>
@@ -364,7 +618,7 @@ export function SsoScreen() {
                       <span className="mt-1 block text-[12px] text-gray-500">Certificates are not returned after save; enter a replacement only when editing.</span>
                     </label>
                     <div className="rounded-[18px] border border-gray-200 px-4 py-3 text-[14px] leading-6 text-gray-600 md:col-span-2">
-                      OpenWork always requires signed SAML assertions, timestamps, and SP-initiated responses for organization SAML connections.
+                      SAML assertions must be signed and use SP-initiated responses for organization SAML connections.
                     </div>
                   </>
                 ) : (
@@ -376,7 +630,7 @@ export function SsoScreen() {
                     <label className="block text-[14px] text-gray-700">
                       <span className="mb-2 block font-medium">Client Secret</span>
                       <input type="password" className="w-full rounded-[18px] border border-gray-200 px-4 py-3" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder="Secret is not returned after save" disabled={ssoFormDisabled} />
-                      <span className="mt-1 block text-[12px] text-gray-500">Client secrets are never returned by Den.</span>
+                      <span className="mt-1 block text-[12px] text-gray-500">Client secrets are never returned by the server.</span>
                     </label>
                     <label className="block text-[14px] text-gray-700 md:col-span-2">
                       <span className="mb-2 block font-medium">Scopes</span>
@@ -416,6 +670,46 @@ export function SsoScreen() {
                     ) : null}
                   </>
                 )}
+              </div>
+
+              {/* Test Connection */}
+              <div className="mt-5 rounded-[20px] border border-gray-200 bg-gray-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-medium text-gray-700">Test connection</p>
+                    <p className="text-[12px] text-gray-500">Verify that your IdP endpoints are reachable before saving.</p>
+                  </div>
+                  <DenButton
+                    variant="secondary"
+                    icon={Zap}
+                    onClick={() => void handleTestConnection()}
+                    disabled={ssoFormDisabled || testing}
+                  >
+                    {testing ? "Testing..." : "Test connection"}
+                  </DenButton>
+                </div>
+                {testResult ? (
+                  <div className={`mt-3 rounded-[12px] px-3 py-2 text-[13px] ${testResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                    {testResult.ok ? (
+                      <div className="flex items-center gap-2">
+                        <Check className="h-4 w-4" />
+                        Connection test passed at {formatDateTime(testResult.timestamp)}.
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <X className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                        <div>
+                          <p className="font-medium">Connection test failed:</p>
+                          <ul className="mt-1 list-disc pl-4">
+                            {testResult.errors.map((msg, i) => (
+                              <li key={i}>{msg}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               <div className="mt-6 flex flex-wrap gap-3">

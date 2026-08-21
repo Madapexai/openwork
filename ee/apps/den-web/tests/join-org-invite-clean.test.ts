@@ -111,6 +111,7 @@ describe("join organization invite clean layout contract", () => {
     expect(source).toMatch(/<AuthPanel[\s\S]*?\bemailFirstFlow\b/);
     expect(source).toMatch(/<AuthPanel[\s\S]*?\bresolveEmailFirstOnPrefill\b/);
     expect(source).toContain('title: "Create your account."');
+    expect(source).toContain("Choose a name and a password. Your email stays locked to");
     expect(source).toContain('title: "Sign in to continue."');
     expect(source).not.toContain("title: `Join ${preview.organization.name}.`");
     expect(source).toContain("Not now");
@@ -237,9 +238,15 @@ describe("join organization invite clean layout contract", () => {
     const installSource = readFileSync(installScreenPath, "utf8");
     const identitySource = readFileSync(brandIdentityPath, "utf8");
 
-    expect(successSource).toContain("Get the desktop app");
+    expect(successSource).toContain("downloadCtaLabel");
+    expect(successSource).toContain("Already have OpenWork? Open it.");
+    expect(successSource).toContain("buildInstallDownloadHref");
+    expect(successSource).toContain("startInstallerDownload");
+    expect(successSource).not.toContain("window.location.assign(await createOrganizationInstallLink");
+    expect(successSource).not.toContain("Get the desktop app");
     expect(successSource).toContain("Return to OpenWork");
     expect(successSource).toContain("desktopAuthRequested");
+    expect(successSource).toContain('data-testid="join-org-connected"');
     expect(successSource).toContain("Continue in the browser");
     expect(successSource).toContain("Email me the download link");
     expect(successSource).not.toContain("capabilities");

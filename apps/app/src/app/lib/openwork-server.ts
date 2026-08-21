@@ -1123,6 +1123,14 @@ export function writeOpenworkServerSettings(next: OpenworkServerSettings): Openw
   }
 }
 
+function readForceEnvSettingsFlag(): boolean {
+  const raw =
+    typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_OPENWORK_FORCE_ENV_SETTINGS === "string"
+      ? import.meta.env.VITE_OPENWORK_FORCE_ENV_SETTINGS.trim()
+      : "";
+  return /^(1|true|yes|on)$/i.test(raw);
+}
+
 export function hydrateOpenworkServerSettingsFromEnv() {
   if (typeof window === "undefined") return;
   if (isOpenworkGatewayRuntime()) return;
@@ -1142,6 +1150,7 @@ export function hydrateOpenworkServerSettingsFromEnv() {
   const bootstrapToken = typeof window.__OPENWORK_BOOTSTRAP__?.token === "string"
     ? window.__OPENWORK_BOOTSTRAP__.token.trim()
     : "";
+  const forceEnvSettings = readForceEnvSettingsFlag();
 
   if (!envUrl && !envPort && !envToken && !envHostToken && !bootstrapToken) return;
 
@@ -1150,14 +1159,17 @@ export function hydrateOpenworkServerSettingsFromEnv() {
     const next: OpenworkServerSettings = { ...current };
     let changed = false;
 
-    if (!current.urlOverride && envUrl) {
-      next.urlOverride = normalizeOpenworkServerUrl(envUrl) ?? undefined;
-      changed = true;
+    if (envUrl && (forceEnvSettings || !current.urlOverride)) {
+      const normalized = normalizeOpenworkServerUrl(envUrl);
+      if (normalized && normalized !== current.urlOverride) {
+        next.urlOverride = normalized;
+        changed = true;
+      }
     }
 
-    if (!current.portOverride && envPort) {
+    if (envPort && (forceEnvSettings || !current.portOverride)) {
       const parsed = Number(envPort);
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed > 0 && parsed !== current.portOverride) {
         next.portOverride = parsed;
         changed = true;
       }
@@ -1166,13 +1178,19 @@ export function hydrateOpenworkServerSettingsFromEnv() {
     if (bootstrapToken && current.token !== bootstrapToken) {
       next.token = bootstrapToken;
       changed = true;
-    } else if (!current.token && envToken) {
+    } else if (envToken && (forceEnvSettings || !current.token) && current.token !== envToken) {
       next.token = envToken;
       changed = true;
     }
 
-    if (!current.hostToken && envHostToken) {
+    if (envHostToken && (forceEnvSettings || !current.hostToken) && current.hostToken !== envHostToken) {
       next.hostToken = envHostToken;
+      changed = true;
+    } else if (forceEnvSettings && !envHostToken && current.hostToken) {
+      // Headless web does not inject the host token into the Vite bundle.
+      // Drop a leftover value from an earlier desktop/dev session so it
+      // cannot keep authorizing host-token routes from the browser.
+      next.hostToken = undefined;
       changed = true;
     }
 

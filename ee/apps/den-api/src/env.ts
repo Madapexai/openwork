@@ -128,7 +128,19 @@ const EnvSchema = z.object({
   DEN_CONNECT_LINK_PRIVATE_KEY: z.string().optional(),
   DEN_CONNECT_LINK_KEY_ID: z.string().max(64).optional(),
   DEN_MCP_CONNECTIONS_GATING_ENABLED: z.string().optional(),
+  DEN_GENERATED_ARTIFACT_VIEWS_ENABLED: z.string().optional(),
   SCIM_MAINTENANCE_INTERVAL_MS: z.string().optional(),
+  DEN_TEMP_FILES_STORAGE: z.enum(["volume", "s3"]).optional(),
+  DEN_TEMP_FILES_DIR: z.string().optional(),
+  DEN_TEMP_FILES_TTL_SECONDS: z.string().optional(),
+  DEN_TEMP_FILES_MAX_BYTES: z.string().optional(),
+  DEN_TEMP_FILES_SWEEP_INTERVAL_MS: z.string().optional(),
+  DEN_TEMP_FILES_MAX_LIVE_PER_ORG: z.string().optional(),
+  DEN_TEMP_FILES_S3_BUCKET: z.string().optional(),
+  DEN_TEMP_FILES_S3_REGION: z.string().optional(),
+  DEN_TEMP_FILES_S3_ENDPOINT: z.string().optional(),
+  DEN_TEMP_FILES_S3_PREFIX: z.string().optional(),
+  DEN_TEMP_FILES_S3_FORCE_PATH_STYLE: z.string().optional(),
   POLAR_FEATURE_GATE_ENABLED: z.string().optional(),
   POLAR_API_BASE: z.string().optional(),
   POLAR_ACCESS_TOKEN: z.string().optional(),
@@ -209,6 +221,14 @@ const EnvSchema = z.object({
       }
     }
   }
+
+  if (value.DEN_TEMP_FILES_STORAGE === "s3" && !value.DEN_TEMP_FILES_S3_BUCKET?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "DEN_TEMP_FILES_S3_BUCKET is required when DEN_TEMP_FILES_STORAGE=s3",
+      path: ["DEN_TEMP_FILES_S3_BUCKET"],
+    })
+  }
 })
 
 const parsed = EnvSchema.parse(process.env)
@@ -225,6 +245,13 @@ function splitCsv(value: string | undefined) {
 function automationTuning(value: string | undefined, fallback: number) {
   const tuned = Number(value)
   return Number.isSafeInteger(tuned) && tuned > 0 ? tuned : fallback
+}
+
+// A malformed tuning value falls back to the default rather than poisoning a
+// size cap or interval with NaN.
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsedValue = Number(value)
+  return Number.isSafeInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallback
 }
 
 function optionalString(value: string | undefined) {
@@ -427,6 +454,12 @@ const connectLink = connectLinkMode === "signed" && connectLinkPrivateKeyPem && 
 const mcpConnectionsGatingEnabled =
   (parsed.DEN_MCP_CONNECTIONS_GATING_ENABLED ?? "false").toLowerCase() === "true"
 
+// Generated custom views require the matching desktop MCP Apps host release.
+// Keep the Den capability fail-closed so a Den deployment cannot advertise
+// bridge-dependent resources to older published desktop builds.
+const generatedArtifactViewsEnabled =
+  (parsed.DEN_GENERATED_ARTIFACT_VIEWS_ENABLED ?? "false").trim().toLowerCase() === "true"
+
 const devMode = (parsed.OPENWORK_DEV_MODE ?? "0").trim() === "1"
 const botIdProtectionEnabled = (parsed.DEN_BOTID_PROTECTION_ENABLED ?? "0").trim() === "1"
 const diagnosticsOrigin = normalizeDiagnosticsOrigin(parsed.DEN_DIAGNOSTICS_ORIGIN, devMode)
@@ -441,6 +474,15 @@ const publicUrlTrustedOrigins = Array.from(new Set([
   ...corsOrigins,
   ...betterAuthTrustedOrigins,
 ])).filter((origin) => origin !== "*")
+// Den Web serves this API under /api/den on the better-auth origin, so a
+// request forwarded from that origin is first-party by construction. Hosted
+// deployments proxy browser and desktop calls server-side and never need that
+// origin in CORS_ORIGINS, so deriving public routes from the CORS allowlist
+// alone silently drops the one origin clients actually call.
+const publicProxyTrustedOrigins = Array.from(new Set([
+  normalizeOrigin(parsed.BETTER_AUTH_URL),
+  ...publicUrlTrustedOrigins,
+]))
 const orgMode = parseDenOrgMode(parsed.DEN_ORG_MODE)
 // SSRF guard for External MCP Connection URLs: on hosted (multi-tenant)
 // deployments, Den must not fetch private/reserved addresses on behalf of
@@ -508,7 +550,23 @@ export const env = {
   installLinksGatingEnabled,
   connectLink,
   mcpConnectionsGatingEnabled,
+  generatedArtifactViewsEnabled,
   scimMaintenanceIntervalMs: Number(parsed.SCIM_MAINTENANCE_INTERVAL_MS ?? "300000"),
+  tempFiles: {
+    storage: parsed.DEN_TEMP_FILES_STORAGE ?? "volume",
+    directory: optionalString(parsed.DEN_TEMP_FILES_DIR) ?? path.join(os.tmpdir(), "openwork-temp-files"),
+    ttlSeconds: positiveInteger(parsed.DEN_TEMP_FILES_TTL_SECONDS, 86_400),
+    maxBytes: positiveInteger(parsed.DEN_TEMP_FILES_MAX_BYTES, 20 * 1024 * 1024),
+    sweepIntervalMs: positiveInteger(parsed.DEN_TEMP_FILES_SWEEP_INTERVAL_MS, 900_000),
+    maxLivePerOrganization: positiveInteger(parsed.DEN_TEMP_FILES_MAX_LIVE_PER_ORG, 200),
+    s3: {
+      bucket: optionalString(parsed.DEN_TEMP_FILES_S3_BUCKET),
+      region: optionalString(parsed.DEN_TEMP_FILES_S3_REGION) ?? "us-east-1",
+      endpoint: optionalString(parsed.DEN_TEMP_FILES_S3_ENDPOINT),
+      prefix: optionalString(parsed.DEN_TEMP_FILES_S3_PREFIX) ?? "temp-files/",
+      forcePathStyle: parseBooleanFlag(parsed.DEN_TEMP_FILES_S3_FORCE_PATH_STYLE),
+    },
+  },
   requireEmailVerification,
   passwordBreachScreeningEnabled,
   github: {
@@ -574,6 +632,7 @@ export const env = {
     renderGitCommit: parsed.RENDER_GIT_COMMIT,
   }),
   publicUrlTrustedOrigins,
+  publicProxyTrustedOrigins,
   installerArtifactsDir: optionalString(parsed.OPENWORK_INSTALLER_ARTIFACTS_DIR),
   // Standard desktop release assets: the release tag to download from,
   // defaulting to the pinned app release this den-api build shipped with.

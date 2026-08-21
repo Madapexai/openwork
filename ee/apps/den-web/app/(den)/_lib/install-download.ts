@@ -1,4 +1,10 @@
 export type InstallPlatform = "mac-arm64" | "mac-x64" | "win-x64" | "linux-x64" | "linux-arm64";
+export type DetectedInstallerOs = "macos" | "windows" | "linux";
+export type DetectedInstallerArch = "arm64" | "x64";
+export type DetectedInstallerPlatform = {
+  os: DetectedInstallerOs;
+  arch: DetectedInstallerArch | null;
+};
 
 export function installerFileName(platform: InstallPlatform | null, version: string) {
   if (!platform || !version.trim()) return null;
@@ -25,4 +31,47 @@ export function buildInstallDownloadHref(apiUrl: string, platform: InstallPlatfo
   url.search = `?token=${encodeURIComponent(token)}`;
   url.hash = "";
   return url.toString();
+}
+
+export function installTokenFromPageUrl(value: string) {
+  try {
+    const token = new URL(value).searchParams.get("token")?.trim() ?? "";
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+export function detectedInstallPlatform(detected: DetectedInstallerPlatform | null): InstallPlatform | null {
+  if (!detected) return null;
+  if (detected.os === "windows") return "win-x64";
+  if (detected.os === "macos" && detected.arch === "arm64") return "mac-arm64";
+  if (detected.os === "macos" && detected.arch === "x64") return "mac-x64";
+  if (detected.os === "linux" && detected.arch === "arm64") return "linux-arm64";
+  if (detected.os === "linux") return "linux-x64";
+  if (detected.os === "macos") return "mac-arm64";
+  return null;
+}
+
+export function downloadCtaLabel(os: DetectedInstallerOs | null) {
+  if (os === "windows") return "Download for Windows";
+  if (os === "linux") return "Download for Linux";
+  return "Download for macOS";
+}
+
+export function installerApiUrlFromConfig(payload: unknown) {
+  if (!payload || typeof payload !== "object" || !("apiUrl" in payload)) {
+    return null;
+  }
+
+  const apiUrl = payload.apiUrl;
+  if (typeof apiUrl !== "string" || !apiUrl.trim()) {
+    return null;
+  }
+
+  try {
+    return new URL(apiUrl.trim()).toString();
+  } catch {
+    return null;
+  }
 }

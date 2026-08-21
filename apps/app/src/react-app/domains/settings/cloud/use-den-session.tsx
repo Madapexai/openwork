@@ -241,12 +241,13 @@ export function useDenSession({
   const openBrowserAuth = React.useCallback(
     (mode: "sign-in" | "sign-up") => {
       const url = buildDenAuthUrl(baseUrl, mode);
+      const usesPasteHandoff = new URL(url).searchParams.get("desktopAuth") === "1";
       markDesktopSignInInitiated();
       setSigninFallbackUrl(url);
       setStatusMessage(
         mode === "sign-up"
-          ? t("den.status_browser_signup")
-          : t("den.status_browser_signin"),
+          ? t(usesPasteHandoff ? "den.status_browser_signup_paste" : "den.status_browser_signup")
+          : t(usesPasteHandoff ? "den.status_browser_signin_paste" : "den.status_browser_signin"),
       );
       setAuthError(null);
       void tryOpenBrowserAuthUrl(url).then((opened) => {

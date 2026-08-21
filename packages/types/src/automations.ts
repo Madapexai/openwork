@@ -128,6 +128,7 @@ export const automationRevisionSchema = z.object({
   executionTarget: z.enum(["desktop", "cloud"]).optional(),
   maximumRuntimeMs: z.number().int().min(10_000).max(60 * 60 * 1_000),
   digest: z.string().trim().min(16).max(128),
+  goal: z.string().trim().min(1).max(500).optional(),
   createdAt: timestampSchema,
 })
 export type AutomationRevision = z.infer<typeof automationRevisionSchema>
@@ -317,6 +318,7 @@ const actionCreateAutomationSchema = z.object({
   schedule: automationScheduleSchema,
   action: automationActionSchema,
   executionTarget: automationExecutionTargetSchema,
+  goal: z.string().trim().min(1).max(500).optional(),
 }).superRefine((value, context) => {
   const validPair = value.executionTarget === "cloud"
   if (!validPair) {

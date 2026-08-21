@@ -21,10 +21,14 @@ function isJsonValue(value: unknown, depth = 0): value is JSONValue {
 
 function toolCallProviderMetadata(part: ToolPart): ProviderMetadata {
   const stateMetadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {};
-  const mcpApp = isJsonValue(stateMetadata.openworkMcpApp) ? stateMetadata.openworkMcpApp : null;
+  const mcpResult = isJsonValue(stateMetadata.openworkMcpResult)
+    ? stateMetadata.openworkMcpResult
+    : isJsonValue(stateMetadata.openworkMcpApp)
+      ? stateMetadata.openworkMcpApp
+      : null;
   return {
     opencode: { partId: part.id },
-    ...(mcpApp ? { openwork: { mcpApp } } : {}),
+    ...(mcpResult ? { openwork: { mcpResult } } : {}),
   };
 }
 

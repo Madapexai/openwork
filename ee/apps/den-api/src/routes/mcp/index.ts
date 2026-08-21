@@ -53,10 +53,7 @@ const organizationRequiredSchema = z.object({
 
 type McpRouteVariables = AuthContextVariables & Partial<OrganizationContextVariables>
 
-const firstPartyMcpTokenTrustedOrigins = Array.from(new Set([
-  env.betterAuthUrl,
-  ...env.publicUrlTrustedOrigins,
-]))
+const firstPartyMcpTokenTrustedOrigins = env.publicProxyTrustedOrigins
 
 export function registerMcpTokenRoutes<T extends { Variables: McpRouteVariables }>(app: Hono<T>) {
   app.post(

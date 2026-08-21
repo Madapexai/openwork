@@ -11,6 +11,8 @@
  */
 
 import { type DenSettings, readDenSettings, resolveDenBaseUrls } from "./den";
+import { desktopFetchViaMain } from "./desktop";
+import { isDesktopRuntime } from "./runtime-env";
 
 const INGEST_PATH = "/v1/telemetry/ingest";
 const INGEST_TIMEOUT_MS = 5_000;
@@ -72,7 +74,10 @@ async function flushEvents(): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), INGEST_TIMEOUT_MS);
 
     try {
-      await globalThis.fetch(url, {
+      const fetchImpl = isDesktopRuntime() && new URL(url).origin !== window.location.origin
+        ? desktopFetchViaMain
+        : globalThis.fetch;
+      await fetchImpl(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -12,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { useShellConfig } from "../../shell/shell-config";
-import { OrganizationServerAffordance } from "../settings/cloud/organization-server-affordance";
 
 type WelcomePageProps = {
   onGetStarted: () => void;
@@ -25,10 +24,6 @@ type WelcomePageProps = {
   showManualFolder?: boolean;
   onTeamSignIn?: () => void;
   onJoinOrganization: () => void;
-  organizationServerBusy: boolean;
-  organizationServerError: string | null;
-  organizationServerUrl: string;
-  onOrganizationServerSave: (url: string) => Promise<boolean>;
 };
 
 export function WelcomePage({
@@ -42,10 +37,6 @@ export function WelcomePage({
   showManualFolder,
   onTeamSignIn,
   onJoinOrganization,
-  organizationServerBusy,
-  organizationServerError,
-  organizationServerUrl,
-  onOrganizationServerSave,
 }: WelcomePageProps) {
   const { config: shellConfig } = useShellConfig();
   const appName = shellConfig.appName;
@@ -149,13 +140,6 @@ export function WelcomePage({
                     </span>
                   </button>
                 </div>
-
-                <OrganizationServerAffordance
-                  busy={organizationServerBusy}
-                  error={organizationServerError}
-                  onSave={onOrganizationServerSave}
-                  url={organizationServerUrl}
-                />
 
                 {error ? (
                   <p className="text-center text-xs text-destructive">{error}</p>

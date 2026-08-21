@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@openwork-ee/den-db": ["../den-db/src/index.ts"],
+      "@openwork-ee/den-db/*": ["../den-db/src/*"],
+      "@openwork-ee/utils": ["../utils/src/index.ts"],
+      "@openwork-ee/utils/*": ["../utils/src/*"],
+      "@openwork-ee/team-autonomy/*": ["./src/*"]
+    },
+    "rootDir": "../../..",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    // MIGRATION PHASE: bridge shims re-exporting den-api internals for
+    // runtime only. Excluded from tsc to avoid pulling the entire den-api
+    // tree (which has pre-existing errors) into the plugin's typecheck.
+    "src/services/_services-barrel.ts",
+    "src/http/handlers/**/*.ts",
+    "src/http/routes.ts"
+  ]
+}

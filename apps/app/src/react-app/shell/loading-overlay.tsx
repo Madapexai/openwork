@@ -5,6 +5,8 @@ import type { DenAppVersionMetadata, DenDesktopConfig } from "@/app/lib/den";
 import { readFreshDenAppVersionMetadata } from "@/app/lib/version-gate";
 import { useDesktopConfig } from "@/react-app/domains/cloud/desktop-config-provider";
 import { bootOverlayCanHide, useBootState, useBootOverlayVisible } from "./boot-state";
+import { useCloudWorkspaceStatus } from "./cloud-workspace-overlay";
+import { shouldSuppressBootOverlayForGateway } from "./cloud-workspace-status";
 import { OwDotTicker } from "./dot-ticker";
 
 async function loadRecoveryPolicy(
@@ -27,6 +29,12 @@ async function loadRecoveryPolicy(
 export function LoadingOverlay() {
   const visible = useBootOverlayVisible();
   const { phase, routeReady, message, error } = useBootState();
+  const cloudWorkspace = useCloudWorkspaceStatus();
+  const suppressForGateway = shouldSuppressBootOverlayForGateway({
+    gatewayMode: cloudWorkspace.gatewayMode,
+    signedIn: cloudWorkspace.visible,
+    variant: cloudWorkspace.viewModel.variant,
+  });
   const { config: desktopPolicy, refreshFresh: refreshDesktopPolicy } = useDesktopConfig();
   const [releases, setReleases] = useState<RecoveryRelease[]>([]);
   const [showPicker, setShowPicker] = useState(false);
@@ -86,7 +94,7 @@ export function LoadingOverlay() {
 
   const useRelease = window.__OPENWORK_ELECTRON__?.recovery?.use;
 
-  if (!visible) return null;
+  if (!visible || (suppressForGateway && !error)) return null;
 
   const fading = bootOverlayCanHide(phase, routeReady);
 

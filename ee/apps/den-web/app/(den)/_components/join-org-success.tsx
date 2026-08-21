@@ -1,5 +1,6 @@
 "use client";
 
+import { detectPlatform, type DetectedPlatform } from "@openwork/ui/react";
 import { useEffect, useState } from "react";
 import {
   getDesktopHandoffGrant,
@@ -7,6 +8,14 @@ import {
   rememberDesktopHandoffGrant,
 } from "../_lib/desktop-handoff";
 import { getErrorMessage, requestJson } from "../_lib/den-flow";
+import { getInstallConfigErrorMessage } from "../_lib/install-errors";
+import {
+  buildInstallDownloadHref,
+  detectedInstallPlatform,
+  downloadCtaLabel,
+  installerApiUrlFromConfig,
+  installTokenFromPageUrl,
+} from "../_lib/install-download";
 import { createOrganizationInstallLink } from "../_lib/install-link-data";
 import { isMobileUserAgent } from "../_lib/platform";
 import { useDesktopHandoffStatus } from "../_lib/use-desktop-handoff-status";
@@ -89,6 +98,8 @@ export function JoinOrgSuccess({
   onContinueInBrowser,
 }: JoinOrgSuccessProps) {
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
+  const [detected, setDetected] = useState<DetectedPlatform | null>(null);
+  const [platformReady, setPlatformReady] = useState(false);
   const [installBusy, setInstallBusy] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
@@ -96,17 +107,71 @@ export function JoinOrgSuccess({
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [desktopOpenworkUrl, setDesktopOpenworkUrl] = useState<string | null>(null);
   const [desktopGrant, setDesktopGrant] = useState<string | null>(null);
+  const [downloadHref, setDownloadHref] = useState<string | null>(null);
 
   useEffect(() => {
     setIsMobile(isMobileUserAgent());
+    let cancelled = false;
+    void detectPlatform()
+      .then((platform) => {
+        if (cancelled) {
+          return;
+        }
+        setDetected(platform ?? { os: "macos", arch: "arm64", osVersion: null, source: "ua" });
+        setPlatformReady(true);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setDetected({ os: "macos", arch: "arm64", osVersion: null, source: "ua" });
+        setPlatformReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  function startInstallerDownload(href: string) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    link.setAttribute("data-testid", "join-org-download-link");
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
 
   async function handleGetApp() {
     setInstallBusy(true);
     setActionError(null);
 
     try {
-      window.location.assign(await createOrganizationInstallLink(organizationId, false));
+      const installPageUrl = await createOrganizationInstallLink(organizationId, false);
+      const token = installTokenFromPageUrl(installPageUrl);
+      if (!token) {
+        throw new Error("The install link response was incomplete.");
+      }
+
+      const { response, payload } = await requestJson(
+        `/v1/install-config?token=${encodeURIComponent(token)}`,
+        { method: "GET" },
+        12000,
+      );
+      if (!response.ok) {
+        throw new Error(getInstallConfigErrorMessage(payload, response.status));
+      }
+
+      const apiUrl = installerApiUrlFromConfig(payload);
+      if (!apiUrl) {
+        throw new Error("This install link returned incomplete setup details.");
+      }
+
+      const platform = detectedInstallPlatform(detected) ?? "mac-arm64";
+      const href = buildInstallDownloadHref(apiUrl, platform, token);
+      setDownloadHref(href);
+      startInstallerDownload(href);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not prepare your download.");
     } finally {
@@ -221,16 +286,36 @@ export function JoinOrgSuccess({
                 {handoffBusy ? "Returning to OpenWork..." : "Return to OpenWork"}
               </button>
             )
+          ) : !platformReady ? (
+            <p className="m-0 text-sm text-slate-500">Preparing your next step...</p>
           ) : (
-            <button
-              type="button"
-              className="den-button-primary min-h-12 w-full"
-              onClick={() => void handleGetApp()}
-              disabled={installBusy}
-              data-testid="join-org-get-app"
-            >
-              {installBusy ? "Preparing your download..." : "Get the desktop app"}
-            </button>
+            <div className="grid gap-3">
+              <button
+                type="button"
+                className="den-button-primary min-h-12 w-full"
+                onClick={() => void handleGetApp()}
+                disabled={installBusy}
+                data-testid="join-org-get-app"
+                data-download-href={downloadHref ?? undefined}
+              >
+                {installBusy ? "Preparing your download..." : `${downloadCtaLabel(detected?.os ?? null)} →`}
+              </button>
+              <button
+                type="button"
+                className="min-h-12 w-full rounded-full px-3 text-sm font-medium text-slate-500 underline-offset-4 hover:text-slate-950 hover:underline"
+                onClick={() => void handleReturnToOpenWork()}
+                disabled={handoffBusy}
+                data-testid="join-org-open-app"
+              >
+                {handoffBusy ? "Opening OpenWork..." : "Already have OpenWork? Open it."}
+              </button>
+            </div>
+          )}
+
+          {desktopAuthRequested && desktopOpenworkUrl ? null : (
+            <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700" data-testid="join-org-connected">
+              Connected — OpenWork is set up for {organizationName}
+            </div>
           )}
 
           <button

@@ -59,10 +59,14 @@ function decryptDatabaseValue(value: string) {
     throw new Error("Encrypted value is missing a supported prefix")
   }
 
-  const [ivBase64, authTagBase64, encrypted] = value
+  const [ivBase64, authTagBase64, encrypted, ...unexpected] = value
     .slice(ENCRYPTION_VERSION_PREFIX.length)
     .split(".")
-  if (!ivBase64 || !authTagBase64 || !encrypted) {
+  // AES-GCM legitimately produces an empty ciphertext for an empty plaintext;
+  // the IV and authentication tag still authenticate that value. Artifact view
+  // revisions use empty encrypted strings for optional CSS, so distinguish a
+  // missing segment from a present-but-empty ciphertext segment.
+  if (!ivBase64 || !authTagBase64 || encrypted === undefined || unexpected.length > 0) {
     throw new Error("Encrypted value is malformed")
   }
 

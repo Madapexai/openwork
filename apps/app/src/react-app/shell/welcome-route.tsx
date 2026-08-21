@@ -33,13 +33,12 @@ import { JoinOrganizationDialog } from "../domains/cloud/join-organization-dialo
 import { resolveOpenworkConnection } from "./openwork-connection";
 import { captureAnalyticsEvent } from "../../app/lib/analytics";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../../app/lib/openwork-server";
-import { buildDenAuthUrl, clearDenSession, DEFAULT_DEN_BASE_URL, readDenSettings } from "../../app/lib/den";
+import { buildDenAuthUrl, DEFAULT_DEN_BASE_URL, readDenSettings } from "../../app/lib/den";
 import { markDesktopSignInInitiated } from "../../app/lib/den-sign-in-intent";
 import { denSettingsChangedEvent } from "../../app/lib/den-session-events";
 import { writeActiveWorkspaceId, writeLastSessionFor, writeWorkspaceProjectDimension } from "./session-memory";
 import { workspaceSessionRoute } from "./workspace-routes";
 import { ensureDesktopLocalOpenworkConnection } from "./desktop-local-openwork";
-import { saveControlPlaneUrl } from "../domains/settings/cloud/control-plane-url";
 import { shouldHoldWelcomeForDenSession } from "./welcome-den-session";
 
 function subscribeToDenSettings(onStoreChange: () => void) {
@@ -142,9 +141,6 @@ export function WelcomeRoute() {
   const denAuth = useDenAuth();
   const [state, dispatch] = useReducer(welcomeReducer, initialWelcomeState);
   const [manualFolder, setManualFolder] = useState("");
-  const [organizationServerUrl, setOrganizationServerUrl] = useState(() => readDenSettings().baseUrl);
-  const [organizationServerBusy, setOrganizationServerBusy] = useState(false);
-  const [organizationServerError, setOrganizationServerError] = useState<string | null>(null);
   const [joinOrganizationOpen, setJoinOrganizationOpen] = useState(false);
   const showOpenWorkModelsPromo = useOpenWorkModelsPromoEligibility();
   const denAuthTokenSnapshot = useSyncExternalStore(
@@ -174,34 +170,6 @@ export function WelcomeRoute() {
   const markOnboardingComplete = useCallback(() => {
     local.setPrefs((prev) => ({ ...prev, hasCompletedOnboarding: true }));
   }, [local]);
-
-  useEffect(() => {
-    const handleDenSettingsChanged = () => setOrganizationServerUrl(readDenSettings().baseUrl);
-    window.addEventListener(denSettingsChangedEvent, handleDenSettingsChanged);
-    return () => window.removeEventListener(denSettingsChangedEvent, handleDenSettingsChanged);
-  }, []);
-
-  const handleOrganizationServerSave = useCallback(async (url: string) => {
-    setOrganizationServerBusy(true);
-    setOrganizationServerError(null);
-    try {
-      const persisted = await saveControlPlaneUrl(url);
-      if (!persisted) {
-        setOrganizationServerError(t("welcome.organization_server_error"));
-        return false;
-      }
-      clearDenSession({ includeBaseUrls: false });
-      setOrganizationServerUrl(persisted.baseUrl);
-      return true;
-    } catch (error) {
-      setOrganizationServerError(
-        error instanceof Error ? error.message : t("welcome.organization_server_error"),
-      );
-      return false;
-    } finally {
-      setOrganizationServerBusy(false);
-    }
-  }, []);
 
   const handleCreateWorkspace = useCallback(
     async (_preset: string, folder: string | null, options?: CreateWorkspaceOptions) => {
@@ -433,10 +401,6 @@ export function WelcomeRoute() {
         showManualFolder={import.meta.env.DEV && isDesktopRuntime()}
         onTeamSignIn={handleTeamSignIn}
         onJoinOrganization={() => setJoinOrganizationOpen(true)}
-        organizationServerBusy={organizationServerBusy}
-        organizationServerError={organizationServerError}
-        organizationServerUrl={organizationServerUrl}
-        onOrganizationServerSave={handleOrganizationServerSave}
       />
       <JoinOrganizationDialog
         open={joinOrganizationOpen}

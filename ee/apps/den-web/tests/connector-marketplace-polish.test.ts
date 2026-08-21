@@ -10,17 +10,19 @@ function readDashboardComponent(name: string) {
 }
 
 describe("connector and marketplace polish", () => {
-  test("labels Sources alpha and keeps Marketplace first and Connectors beta", () => {
+  test("labels Sources alpha and keeps Marketplace first with Connectors as MCPs", () => {
     const shell = readDashboardComponent("org-dashboard-shell.tsx");
-    const marketplaceIndex = shell.indexOf('{ href: getMarketplacesRoute(activeOrg.slug), label: "Marketplace" }');
-    const sourcesIndex = shell.indexOf('{ href: getIntegrationsRoute(activeOrg.slug), label: "Sources", badge: "Alpha" }');
-    const pluginsIndex = shell.indexOf('{ href: getPluginsRoute(activeOrg.slug), label: "Plugins" }');
-    const connectorsIndex = shell.indexOf('{ href: getMcpConnectionsRoute(activeOrg.slug), label: "Connectors", badge: "Beta" }');
+    const marketplaceIndex = shell.indexOf('getMarketplacesRoute(activeOrg.slug),\n          label: "Marketplace"');
+    const pluginsIndex = shell.indexOf('getPluginsRoute(activeOrg.slug),\n          label: "Plugin Directory"');
+    const connectorsIndex = shell.indexOf('getMcpConnectionsRoute(activeOrg.slug),\n          label: "Connectors"');
+    const sourcesIndex = shell.indexOf('getIntegrationsRoute(activeOrg.slug),\n          label: "Sources"');
 
     expect(marketplaceIndex).toBeGreaterThan(-1);
-    expect(marketplaceIndex).toBeLessThan(sourcesIndex);
-    expect(sourcesIndex).toBeLessThan(pluginsIndex);
+    expect(marketplaceIndex).toBeLessThan(pluginsIndex);
     expect(pluginsIndex).toBeLessThan(connectorsIndex);
+    expect(connectorsIndex).toBeLessThan(sourcesIndex);
+    expect(shell).toContain('badge: "MCPs"');
+    expect(shell).toContain('badge: "Alpha"');
   });
 
   test("uses the shared page maturity badge to label Sources alpha", () => {

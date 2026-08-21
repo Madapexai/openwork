@@ -453,7 +453,7 @@ export function LibraryScreen() {
           {stateCounts.ready} ready to use
         </DenChip>
       )}
-      title="Library"
+      title="My Library"
       description="Everything you can use in chat — yours, shared with you, from your teams, and org-wide."
       descriptionPlacement="hero"
       colors={["#DBEAFE", "#1E3A8A", "#2563EB", "#A7F3D0"]}

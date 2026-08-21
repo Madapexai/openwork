@@ -124,6 +124,12 @@ export const dynamicArtifactAppPayloadSchema = z.object({
     freshness: artifactFreshnessSchema,
   }),
   data: z.unknown(),
+  codex: z
+    .object({
+      renderMode: z.enum(["inline", "sidebar", "panel"]).optional(),
+      preferMarkdown: z.boolean().optional(),
+    })
+    .optional(),
 })
 export type DynamicArtifactAppPayload = z.infer<typeof dynamicArtifactAppPayloadSchema>
 

@@ -43,6 +43,7 @@ export const automationEngineCapabilityDeclarationSchema = z.object({
   eventDelivery: z.literal("ordered_at_least_once"),
   resultPersistence: z.literal("durable"),
   cancellation: z.enum(["supported", "best_effort", "unsupported"]),
+  goalCheck: z.enum(["supported", "best_effort", "unsupported"]),
   isolation: z.object({
     location: z.literal("cloud"),
     filesystem: z.literal("none"),

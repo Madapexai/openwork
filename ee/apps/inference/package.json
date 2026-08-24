@@ -17,7 +17,7 @@
     "@openwork/types": "workspace:*",
     "@sentry/hono": "^10.65.0",
     "@sentry/node": "^10.65.0",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.7.2",
     "zod": "^4.3.6"
